@@ -337,10 +337,13 @@ def main():
     missing = []
     if not os.environ.get("GITHUB_TOKEN"):
         missing.append("GITHUB_TOKEN")
-    if not os.environ.get("CLAUDE_API_KEY"):
-        missing.append("CLAUDE_API_KEY")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        missing.append("ANTHROPIC_API_KEY")
     if missing:
         log.error(f"Missing environment variables: {', '.join(missing)}")
+        log.error("Please create a .env file with your credentials:")
+        log.error("  cp .env.example .env")
+        log.error("Then add your tokens to .env and run ./run_agent.sh")
         sys.exit(1)
 
     agent = Agent()
