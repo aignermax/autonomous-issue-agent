@@ -23,6 +23,9 @@ agent.log
 repo/*
 !repo/.gitkeep
 
+# Session state files (multi-session persistence)
+.sessions/
+
 # IDE
 .vscode/
 .idea/
