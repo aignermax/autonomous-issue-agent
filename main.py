@@ -24,7 +24,7 @@ LOCAL_PATH = Path(os.environ.get("AGENT_REPO_PATH", "./repo"))
 BRANCH_PREFIX = "agent/"
 POLL_INTERVAL = int(os.environ.get("AGENT_POLL_INTERVAL", "300"))
 ISSUE_LABEL = os.environ.get("AGENT_ISSUE_LABEL", "agent-task")
-MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "30"))
+MAX_TURNS = int(os.environ.get("AGENT_MAX_TURNS", "300"))
 
 # ==============================
 # LOGGING
