@@ -66,11 +66,12 @@ class Agent:
             return None
 
         # Pattern: matches "branch: something" or "branch:something"
+        # Order matters: try most specific patterns first
         patterns = [
-            r'(?:work\s+on\s+)?branch:\s*([^\s\n]+)',
-            r'(?:use\s+)?branch\s*=\s*([^\s\n]+)',
             # Match branch name in code block after "branch:" heading
-            r'branch:\s*```\s*([^\s\n`]+)',
+            r'branch:\s*\n\s*```\s*\n\s*([a-zA-Z0-9/_-]+)',
+            r'(?:work\s+on\s+)?branch:\s*([^\s\n`]+)',
+            r'(?:use\s+)?branch\s*=\s*([^\s\n]+)',
         ]
 
         for pattern in patterns:
