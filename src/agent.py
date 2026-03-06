@@ -227,22 +227,29 @@ Before finishing:
             prompt = self._build_prompt(issue, state if state.session_count > 0 else None)
 
             # Execute Claude Code
-            output, reached_max_turns = self.claude.execute(prompt)
+            output, reached_max_turns, usage = self.claude.execute(prompt)
             log.info(f"Claude Code output:\n{output[:1000]}...")
 
-            # Update session state
-            state.increment_session(self.config.max_turns if reached_max_turns else 0)
+            # Update session state with usage stats
+            state.increment_session(
+                turns_used=self.config.max_turns if reached_max_turns else 0,
+                tokens=usage.total_tokens,
+                cost=usage.estimated_cost_usd
+            )
             state.last_output = output[:5000]  # Keep last 5k chars
 
             if reached_max_turns:
                 state.add_note(f"Session {state.session_count}: Reached max turns, needs continuation")
                 self.session_manager.save_state(state)
 
-                # Add GitHub comment
+                # Add GitHub comment with cost
                 self.github.add_issue_comment(
                     issue,
-                    f"🤖 Session {state.session_count} completed ({state.total_turns_used} turns used).\n"
-                    f"Continuing work in next session..."
+                    f"🤖 **Session {state.session_count} completed**\n\n"
+                    f"- Turns used: {state.total_turns_used}\n"
+                    f"- Tokens: {state.total_tokens:,}\n"
+                    f"- Cost so far: ${state.total_cost_usd:.4f}\n\n"
+                    f"_Continuing work in next session..._"
                 )
 
                 return IssueResult(
@@ -267,8 +274,14 @@ Before finishing:
                     error="No file changes produced.",
                 )
 
-            # Create PR
-            pr_body_suffix = f"\n**Sessions:** {state.session_count}\n**Total turns:** {state.total_turns_used}"
+            # Create PR with cost information
+            pr_body_suffix = (
+                f"\n## 🤖 Agent Stats\n\n"
+                f"- **Sessions:** {state.session_count}\n"
+                f"- **Total turns:** {state.total_turns_used}\n"
+                f"- **Total tokens:** {state.total_tokens:,}\n"
+                f"- **Estimated cost:** ${state.total_cost_usd:.4f} USD\n"
+            )
             pr_url = self.github.create_pull_request(branch, issue, pr_body_suffix)
             self.github.close_issue(issue, pr_url)
 

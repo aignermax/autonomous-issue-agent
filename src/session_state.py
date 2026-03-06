@@ -33,6 +33,8 @@ class SessionState:
     pr_url: Optional[str] = None
     last_output: str = ""
     notes: list[str] = None
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
 
     def __post_init__(self):
         if self.notes is None:
@@ -43,10 +45,19 @@ class SessionState:
         timestamp = datetime.now().isoformat()
         self.notes.append(f"[{timestamp}] {note}")
 
-    def increment_session(self, turns_used: int) -> None:
-        """Record completion of a session."""
+    def increment_session(self, turns_used: int, tokens: int = 0, cost: float = 0.0) -> None:
+        """
+        Record completion of a session.
+
+        Args:
+            turns_used: Number of turns consumed
+            tokens: Total tokens used
+            cost: Cost in USD
+        """
         self.session_count += 1
         self.total_turns_used += turns_used
+        self.total_tokens += tokens
+        self.total_cost_usd += cost
         self.last_session_at = datetime.now().isoformat()
 
 

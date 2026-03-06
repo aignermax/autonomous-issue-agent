@@ -4,10 +4,41 @@ Claude Code CLI integration.
 
 import subprocess
 import logging
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+from dataclasses import dataclass
 
 log = logging.getLogger("agent")
+
+
+@dataclass
+class UsageStats:
+    """Token usage and cost statistics."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_creation_tokens
+
+    @property
+    def estimated_cost_usd(self) -> float:
+        """
+        Calculate cost based on Claude Sonnet 4 pricing (as of March 2025):
+        - Input: $3.00 / 1M tokens
+        - Output: $15.00 / 1M tokens
+        - Cache reads: $0.30 / 1M tokens
+        - Cache writes: $3.75 / 1M tokens
+        """
+        cost = 0.0
+        cost += (self.input_tokens / 1_000_000) * 3.00
+        cost += (self.output_tokens / 1_000_000) * 15.00
+        cost += (self.cache_read_tokens / 1_000_000) * 0.30
+        cost += (self.cache_creation_tokens / 1_000_000) * 3.75
+        return cost
 
 
 class ClaudeCode:
@@ -39,7 +70,7 @@ class ClaudeCode:
             )
         log.info(f"Claude Code version: {result.stdout.strip()}")
 
-    def execute(self, prompt: str, resume_file: Optional[Path] = None) -> tuple[str, bool]:
+    def execute(self, prompt: str, resume_file: Optional[Path] = None) -> Tuple[str, bool, UsageStats]:
         """
         Run a prompt through Claude Code headless mode.
 
@@ -48,7 +79,7 @@ class ClaudeCode:
             resume_file: Optional state file to resume from previous session
 
         Returns:
-            Tuple of (output string, reached_max_turns)
+            Tuple of (output string, reached_max_turns, usage_stats)
         """
         cmd = [
             "claude", "-p", prompt,
@@ -78,4 +109,38 @@ class ClaudeCode:
         output = result.stdout
         reached_max_turns = "Reached max turns" in output or "max turns" in output.lower()
 
-        return output, reached_max_turns
+        # Parse token usage from output
+        usage = self._parse_usage(output)
+        log.info(f"Token usage: {usage.total_tokens:,} tokens, Estimated cost: ${usage.estimated_cost_usd:.4f}")
+
+        return output, reached_max_turns, usage
+
+    def _parse_usage(self, output: str) -> UsageStats:
+        """
+        Parse token usage from Claude Code output.
+
+        Claude Code outputs usage stats like:
+        "Usage: input=12345 output=6789 cache_read=1234 cache_creation=5678"
+
+        Args:
+            output: Claude Code stdout
+
+        Returns:
+            UsageStats object
+        """
+        usage = UsageStats()
+
+        # Try to find usage pattern in output
+        patterns = {
+            'input_tokens': r'input[_\s]*tokens?[:\s=]+(\d+)',
+            'output_tokens': r'output[_\s]*tokens?[:\s=]+(\d+)',
+            'cache_read_tokens': r'cache[_\s]*read[_\s]*tokens?[:\s=]+(\d+)',
+            'cache_creation_tokens': r'cache[_\s]*(?:creation|write)[_\s]*tokens?[:\s=]+(\d+)',
+        }
+
+        for field, pattern in patterns.items():
+            match = re.search(pattern, output, re.IGNORECASE)
+            if match:
+                setattr(usage, field, int(match.group(1)))
+
+        return usage
