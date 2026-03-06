@@ -4,6 +4,7 @@ Autonomous Issue Agent - Main orchestration with multi-session support.
 
 import time
 import logging
+import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -46,6 +47,39 @@ class Agent:
         self.claude = ClaudeCode(config.local_path, config.max_turns)
         self.session_manager = SessionManager(config.session_dir)
 
+    def _extract_branch_from_issue(self, issue) -> Optional[str]:
+        """
+        Extract target branch name from issue body.
+
+        Looks for patterns like:
+        - "branch: feature/xyz"
+        - "Work on branch: feature/xyz"
+        - "Please work on branch: feature/xyz"
+
+        Args:
+            issue: GitHub Issue object
+
+        Returns:
+            Branch name if found, None otherwise
+        """
+        if not issue.body:
+            return None
+
+        # Pattern: matches "branch: something" or "branch:something"
+        patterns = [
+            r'(?:work\s+on\s+)?branch:\s*([^\s\n]+)',
+            r'(?:use\s+)?branch\s*=\s*([^\s\n]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, issue.body, re.IGNORECASE)
+            if match:
+                branch_name = match.group(1).strip()
+                log.info(f"Found target branch in issue body: {branch_name}")
+                return branch_name
+
+        return None
+
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
         Build the implementation prompt for Claude Code.
@@ -57,6 +91,10 @@ class Agent:
         Returns:
             Formatted prompt string
         """
+        # Determine if working on existing feature branch
+        is_feature_branch = not state.branch_name.startswith(self.config.branch_prefix)
+        branch_note = f"\n**IMPORTANT:** You are working on existing branch: `{state.branch_name}`\nDo NOT create a new branch. All work must be on this branch." if is_feature_branch else ""
+
         if state and state.session_count > 0:
             # Continuation prompt
             prompt = f"""You are continuing work on issue #{issue.number}: {issue.title}
@@ -64,7 +102,7 @@ class Agent:
 ## Progress So Far
 
 Session {state.session_count + 1} - Total turns used: {state.total_turns_used}
-Branch: {state.branch_name}
+Branch: {state.branch_name}{branch_note}
 
 {chr(10).join(state.notes[-5:])}  # Last 5 notes
 
@@ -81,6 +119,7 @@ Read CLAUDE.md for all project conventions."""
         else:
             # Initial prompt
             prompt = f"""You are a senior C# / Avalonia developer implementing issue #{issue.number}: {issue.title}
+{branch_note}
 
 ## CRITICAL: Read CLAUDE.md First
 
@@ -148,8 +187,17 @@ Before finishing:
             log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
             branch = state.branch_name
         else:
-            # New session
-            branch = f"{self.config.branch_prefix}issue-{issue_num}-{int(time.time())}"
+            # New session - check if issue specifies a branch
+            target_branch = self._extract_branch_from_issue(issue)
+
+            if target_branch:
+                branch = target_branch
+                log.info(f"Using existing branch from issue: {branch}")
+            else:
+                # Create new branch
+                branch = f"{self.config.branch_prefix}issue-{issue_num}-{int(time.time())}"
+                log.info(f"Creating new branch: {branch}")
+
             state = self.session_manager.create_state(issue_num, branch)
             log.info(f"Starting new session for issue #{issue_num}")
 
@@ -157,11 +205,23 @@ Before finishing:
             # Ensure repo is up to date
             self.git.ensure_cloned()
 
-            # Create or checkout branch
-            if not self.git.branch_exists(branch):
-                self.git.create_branch(branch)
-            else:
+            # Handle branch: checkout existing or create new
+            if self.git.branch_exists(branch):
+                log.info(f"Checking out existing branch: {branch}")
                 self.git.run("checkout", branch)
+                # Pull latest changes if it's a feature branch
+                if not branch.startswith(self.config.branch_prefix):
+                    self.git.run("pull", "origin", branch)
+            else:
+                # Check if branch exists on remote
+                remote_exists = self.git.run("ls-remote", "--heads", "origin", branch)
+                if remote_exists.returncode == 0 and branch in remote_exists.stdout:
+                    log.info(f"Fetching and checking out remote branch: {branch}")
+                    self.git.run("fetch", "origin", branch)
+                    self.git.run("checkout", "-b", branch, f"origin/{branch}")
+                else:
+                    log.info(f"Creating new branch: {branch}")
+                    self.git.create_branch(branch)
 
             # Build prompt
             prompt = self._build_prompt(issue, state if state.session_count > 0 else None)
