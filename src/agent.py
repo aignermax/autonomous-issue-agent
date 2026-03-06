@@ -69,10 +69,12 @@ class Agent:
         patterns = [
             r'(?:work\s+on\s+)?branch:\s*([^\s\n]+)',
             r'(?:use\s+)?branch\s*=\s*([^\s\n]+)',
+            # Match branch name in code block after "branch:" heading
+            r'branch:\s*```\s*([^\s\n`]+)',
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, issue.body, re.IGNORECASE)
+            match = re.search(pattern, issue.body, re.IGNORECASE | re.DOTALL)
             if match:
                 branch_name = match.group(1).strip()
                 # Clean up markdown formatting: **`branch`** -> branch
