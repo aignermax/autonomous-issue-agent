@@ -84,7 +84,7 @@ class ClaudeCode:
         cmd = [
             "claude", "-p", prompt,
             "--dangerously-skip-permissions",
-            "--output-format", "text",
+            "--output-format", "json",  # Changed to JSON to parse usage stats
             "--max-turns", str(self.max_turns),
         ]
 
@@ -107,13 +107,44 @@ class ClaudeCode:
             raise RuntimeError(f"Claude Code exit code {result.returncode}")
 
         output = result.stdout
-        reached_max_turns = "Reached max turns" in output or "max turns" in output.lower()
 
-        # Parse token usage from output
-        usage = self._parse_usage(output)
+        # Parse JSON response to extract result and usage
+        try:
+            import json
+            response = json.loads(output)
+            actual_output = response.get("result", output)
+            reached_max_turns = response.get("num_turns", 0) >= self.max_turns
+            usage = self._parse_json_usage(response)
+        except (json.JSONDecodeError, KeyError) as e:
+            log.warning(f"Failed to parse JSON output: {e}")
+            actual_output = output
+            reached_max_turns = "Reached max turns" in output or "max turns" in output.lower()
+            usage = UsageStats()
+
         log.info(f"Token usage: {usage.total_tokens:,} tokens, Estimated cost: ${usage.estimated_cost_usd:.4f}")
 
-        return output, reached_max_turns, usage
+        return actual_output, reached_max_turns, usage
+
+    def _parse_json_usage(self, response: dict) -> UsageStats:
+        """
+        Parse token usage from Claude Code JSON response.
+
+        Args:
+            response: Parsed JSON response from Claude Code
+
+        Returns:
+            UsageStats object
+        """
+        usage = UsageStats()
+
+        # Extract from usage object
+        usage_obj = response.get("usage", {})
+        usage.input_tokens = usage_obj.get("input_tokens", 0)
+        usage.output_tokens = usage_obj.get("output_tokens", 0)
+        usage.cache_read_tokens = usage_obj.get("cache_read_input_tokens", 0)
+        usage.cache_creation_tokens = usage_obj.get("cache_creation_input_tokens", 0)
+
+        return usage
 
     def _parse_usage(self, output: str) -> UsageStats:
         """

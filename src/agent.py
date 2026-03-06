@@ -287,7 +287,11 @@ Before finishing:
                 f"- **Total tokens:** {state.total_tokens:,}\n"
                 f"- **Estimated cost:** ${state.total_cost_usd:.4f} USD\n"
             )
-            pr_url = self.github.create_pull_request(branch, issue, pr_body_suffix)
+            pr_url = self.github.create_pull_request(
+                branch, issue,
+                body_suffix=pr_body_suffix,
+                summary=output  # Include Claude Code's summary
+            )
             self.github.close_issue(issue, pr_url)
 
             # Mark session as completed
