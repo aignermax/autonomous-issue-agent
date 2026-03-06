@@ -75,6 +75,8 @@ class Agent:
             match = re.search(pattern, issue.body, re.IGNORECASE)
             if match:
                 branch_name = match.group(1).strip()
+                # Clean up markdown formatting: **`branch`** -> branch
+                branch_name = re.sub(r'[*`]+', '', branch_name).strip()
                 log.info(f"Found target branch in issue body: {branch_name}")
                 return branch_name
 
@@ -92,7 +94,7 @@ class Agent:
             Formatted prompt string
         """
         # Determine if working on existing feature branch
-        is_feature_branch = not state.branch_name.startswith(self.config.branch_prefix)
+        is_feature_branch = state and not state.branch_name.startswith(self.config.branch_prefix)
         branch_note = f"\n**IMPORTANT:** You are working on existing branch: `{state.branch_name}`\nDo NOT create a new branch. All work must be on this branch." if is_feature_branch else ""
 
         if state and state.session_count > 0:
