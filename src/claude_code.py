@@ -5,6 +5,9 @@ Claude Code CLI integration.
 import subprocess
 import logging
 import re
+import os
+import shutil
+import platform
 from pathlib import Path
 from typing import Optional, Tuple
 from dataclasses import dataclass
@@ -41,6 +44,52 @@ class UsageStats:
         return cost
 
 
+def find_claude_cli() -> str:
+    """
+    Find Claude CLI executable in PATH or common install locations.
+    
+    Returns:
+        Path to claude executable
+        
+    Raises:
+        RuntimeError: If Claude CLI cannot be found
+    """
+    # Allow override via environment variable
+    if os.environ.get("CLAUDE_CLI_PATH"):
+        path = os.environ["CLAUDE_CLI_PATH"]
+        if os.path.exists(path):
+            return path
+        log.warning(f"CLAUDE_CLI_PATH set but file not found: {path}")
+    
+    # Try PATH first
+    claude_cmd = shutil.which("claude")
+    if claude_cmd:
+        return claude_cmd
+
+    # Windows: npm global modules
+    if platform.system() == "Windows":
+        npm_path = os.path.expanduser("~/AppData/Roaming/npm/claude.cmd")
+        if os.path.exists(npm_path):
+            return npm_path
+
+    # Unix-like: common npm global locations
+    unix_paths = [
+        os.path.expanduser("~/.npm-global/bin/claude"),
+        "/usr/local/bin/claude",
+        os.path.expanduser("~/.local/bin/claude"),
+        "/opt/homebrew/bin/claude",  # Homebrew on Apple Silicon
+    ]
+    for path in unix_paths:
+        if os.path.exists(path):
+            return path
+
+    raise RuntimeError(
+        "Claude Code CLI not found. Install with:\n"
+        "  npm install -g @anthropic-ai/claude-code\n\n"
+        "Or set CLAUDE_CLI_PATH environment variable to the claude executable path."
+    )
+
+
 class ClaudeCode:
     """Runs Claude Code CLI in headless mode."""
 
@@ -54,21 +103,29 @@ class ClaudeCode:
         """
         self.working_dir = working_dir
         self.max_turns = max_turns
+        self.claude_cli = find_claude_cli()
         self._verify_installation()
 
     def _verify_installation(self) -> None:
-        """Verify that Claude Code CLI is installed."""
-        result = subprocess.run(
-            ["claude", "--version"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
+        """Verify that Claude Code CLI is installed and working."""
+        try:
+            result = subprocess.run(
+                [self.claude_cli, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                log.info(f"Claude Code version: {result.stdout.strip()}")
+            else:
+                raise RuntimeError(f"Claude CLI returned error: {result.stderr}")
+        except FileNotFoundError:
             raise RuntimeError(
-                "Claude Code CLI not found. "
+                f"Claude CLI not found at: {self.claude_cli}\n"
                 "Install: npm install -g @anthropic-ai/claude-code"
             )
-        log.info(f"Claude Code version: {result.stdout.strip()}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Claude CLI verification timed out")
 
     def execute(self, prompt: str, resume_file: Optional[Path] = None) -> Tuple[str, bool, UsageStats]:
         """
@@ -82,9 +139,10 @@ class ClaudeCode:
             Tuple of (output string, reached_max_turns, usage_stats)
         """
         cmd = [
-            "claude", "-p", prompt,
+            self.claude_cli,
+            "-p", prompt,
             "--dangerously-skip-permissions",
-            "--output-format", "json",  # Changed to JSON to parse usage stats
+            "--output-format", "json",
             "--max-turns", str(self.max_turns),
         ]
 
@@ -121,57 +179,18 @@ class ClaudeCode:
             reached_max_turns = "Reached max turns" in output or "max turns" in output.lower()
             usage = UsageStats()
 
-        log.info(f"Token usage: {usage.total_tokens:,} tokens, Estimated cost: ${usage.estimated_cost_usd:.4f}")
-
+        log.info(
+            f"Token usage: {usage.total_tokens} tokens, "
+            f"Estimated cost: ${usage.estimated_cost_usd:.4f}"
+        )
         return actual_output, reached_max_turns, usage
 
     def _parse_json_usage(self, response: dict) -> UsageStats:
-        """
-        Parse token usage from Claude Code JSON response.
-
-        Args:
-            response: Parsed JSON response from Claude Code
-
-        Returns:
-            UsageStats object
-        """
-        usage = UsageStats()
-
-        # Extract from usage object
-        usage_obj = response.get("usage", {})
-        usage.input_tokens = usage_obj.get("input_tokens", 0)
-        usage.output_tokens = usage_obj.get("output_tokens", 0)
-        usage.cache_read_tokens = usage_obj.get("cache_read_input_tokens", 0)
-        usage.cache_creation_tokens = usage_obj.get("cache_creation_input_tokens", 0)
-
-        return usage
-
-    def _parse_usage(self, output: str) -> UsageStats:
-        """
-        Parse token usage from Claude Code output.
-
-        Claude Code outputs usage stats like:
-        "Usage: input=12345 output=6789 cache_read=1234 cache_creation=5678"
-
-        Args:
-            output: Claude Code stdout
-
-        Returns:
-            UsageStats object
-        """
-        usage = UsageStats()
-
-        # Try to find usage pattern in output
-        patterns = {
-            'input_tokens': r'input[_\s]*tokens?[:\s=]+(\d+)',
-            'output_tokens': r'output[_\s]*tokens?[:\s=]+(\d+)',
-            'cache_read_tokens': r'cache[_\s]*read[_\s]*tokens?[:\s=]+(\d+)',
-            'cache_creation_tokens': r'cache[_\s]*(?:creation|write)[_\s]*tokens?[:\s=]+(\d+)',
-        }
-
-        for field, pattern in patterns.items():
-            match = re.search(pattern, output, re.IGNORECASE)
-            if match:
-                setattr(usage, field, int(match.group(1)))
-
-        return usage
+        """Parse usage statistics from JSON response."""
+        usage_data = response.get("usage", {})
+        return UsageStats(
+            input_tokens=usage_data.get("input_tokens", 0),
+            output_tokens=usage_data.get("output_tokens", 0),
+            cache_read_tokens=usage_data.get("cache_read_tokens", 0),
+            cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
+        )
