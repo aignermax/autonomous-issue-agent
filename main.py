@@ -11,6 +11,11 @@ Usage:
 
 import sys
 import logging
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from src.config import Config
 from src.agent import Agent
@@ -37,6 +42,15 @@ log = logging.getLogger("agent")
 
 def main():
     """Main entry point."""
+    # Warn if running inside Claude Code session
+    if os.environ.get("CLAUDECODE"):
+        log.warning("=" * 60)
+        log.warning("WARNING: Running inside a Claude Code session!")
+        log.warning("This may cause nested session conflicts.")
+        log.warning("Recommended: Run in a separate terminal window.")
+        log.warning("=" * 60)
+        # Don't exit - user might have unset it intentionally via .bat file
+    
     # Load configuration
     config = Config()
 
