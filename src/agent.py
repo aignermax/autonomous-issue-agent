@@ -350,13 +350,31 @@ Before finishing:
                     previous_pr_number = previous_pr.number
                     log.info(f"Stacking on PR #{previous_pr_number} ({self.last_branch})")
 
-            pr_url = self.github.create_pull_request(
-                branch, issue,
-                body_suffix=pr_body_suffix,
-                summary=output,  # Include Claude Code's summary
-                base=base_branch,
-                previous_pr_number=previous_pr_number
-            )
+            # Try to create PR with stacked base, fallback to main if base branch was deleted
+            try:
+                pr_url = self.github.create_pull_request(
+                    branch, issue,
+                    body_suffix=pr_body_suffix,
+                    summary=output,  # Include Claude Code's summary
+                    base=base_branch,
+                    previous_pr_number=previous_pr_number
+                )
+            except Exception as e:
+                if "base" in str(e).lower() and "invalid" in str(e).lower():
+                    log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to main")
+                    # Reset stacking and create PR targeting main
+                    self.last_branch = None
+                    self._save_last_branch("")
+                    pr_url = self.github.create_pull_request(
+                        branch, issue,
+                        body_suffix=pr_body_suffix,
+                        summary=output,
+                        base="main",
+                        previous_pr_number=None
+                    )
+                else:
+                    raise
+
             self.github.close_issue(issue, pr_url)
 
             # Save this branch as last_branch for next stacked PR
