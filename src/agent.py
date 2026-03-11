@@ -263,8 +263,16 @@ Before finishing:
                     base_branch = self._get_base_branch()
                     log.info(f"Creating new branch: {branch} from {base_branch}")
 
-                    # Checkout base branch first
-                    self.git.run("checkout", base_branch)
+                    # Checkout base branch first (with fallback to main if it doesn't exist)
+                    checkout_result = self.git.run("checkout", base_branch)
+                    if checkout_result.returncode != 0:
+                        log.warning(f"Base branch {base_branch} doesn't exist, falling back to main")
+                        base_branch = "main"
+                        self.git.run("checkout", base_branch)
+                        # Reset stacking since base branch was deleted
+                        self.last_branch = None
+                        self._save_last_branch("")
+
                     self.git.run("pull", "origin", base_branch)
 
                     # Create new branch from base
