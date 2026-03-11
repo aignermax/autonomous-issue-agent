@@ -19,6 +19,9 @@ class Config:
         self.max_turns: int = int(os.environ.get("AGENT_MAX_TURNS", "300"))
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
 
+        # Stacked PRs - PRs build on each other instead of all on main
+        self.enable_stacked_prs: bool = os.environ.get("AGENT_ENABLE_STACKED_PRS", "false").lower() == "true"
+
         # Tokens
         self.github_token: Optional[str] = os.environ.get("GITHUB_TOKEN")
         self.anthropic_api_key: Optional[str] = os.environ.get("ANTHROPIC_API_KEY")

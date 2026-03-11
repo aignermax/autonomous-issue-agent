@@ -40,7 +40,21 @@ class GitHubClient:
                 return issue
         return None
 
-    def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "") -> str:
+    def get_pr_by_branch(self, branch: str):
+        """
+        Find a PR by its head branch name.
+
+        Args:
+            branch: Branch name to search for
+
+        Returns:
+            PR object or None if not found
+        """
+        for pr in self.repo.get_pulls(state="open", head=branch):
+            return pr
+        return None
+
+    def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "", base: str = "main", previous_pr_number: int = None) -> str:
         """
         Create a pull request for the issue.
 
@@ -49,12 +63,21 @@ class GitHubClient:
             issue: GitHub Issue object
             body_suffix: Optional text to append to PR body
             summary: Summary of changes from Claude Code
+            base: Base branch for the PR (default: "main")
+            previous_pr_number: If stacking, the PR number this one depends on
 
         Returns:
             PR URL
         """
         # Build PR body with summary and stats
         body_parts = [f"Automated implementation for #{issue.number}\n"]
+
+        # Add stacking warning if applicable
+        if previous_pr_number:
+            body_parts.append(
+                f"\n⚠️ **Stacked PR** - This PR is based on #{previous_pr_number}. "
+                f"Merge that PR first, then this one will automatically update to target `main`.\n"
+            )
 
         if summary:
             body_parts.append(f"\n{summary}\n")
@@ -70,7 +93,7 @@ class GitHubClient:
             title=f"Agent: {issue.title}",
             body=body,
             head=branch,
-            base="main",
+            base=base,
         )
         return pr.html_url
 

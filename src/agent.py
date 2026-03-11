@@ -47,6 +47,10 @@ class Agent:
         self.claude = ClaudeCode(config.local_path, config.max_turns)
         self.session_manager = SessionManager(config.session_dir)
 
+        # Track last branch for stacked PRs
+        self.last_branch_file = config.session_dir / ".last_branch"
+        self.last_branch: Optional[str] = self._load_last_branch()
+
     def _extract_branch_from_issue(self, issue) -> Optional[str]:
         """
         Extract target branch name from issue body.
@@ -84,6 +88,36 @@ class Agent:
                 return branch_name
 
         return None
+
+    def _load_last_branch(self) -> Optional[str]:
+        """Load the last branch name from file for stacked PRs."""
+        if self.last_branch_file.exists():
+            try:
+                return self.last_branch_file.read_text().strip()
+            except Exception as e:
+                log.warning(f"Failed to read last branch file: {e}")
+        return None
+
+    def _save_last_branch(self, branch: str):
+        """Save the last branch name for stacked PRs."""
+        try:
+            self.last_branch_file.write_text(branch)
+            log.info(f"Saved last branch for stacking: {branch}")
+        except Exception as e:
+            log.warning(f"Failed to save last branch: {e}")
+
+    def _get_base_branch(self) -> str:
+        """
+        Get the base branch for the next PR.
+
+        Returns:
+            - If stacked PRs enabled and last_branch exists: last_branch
+            - Otherwise: "main"
+        """
+        if self.config.enable_stacked_prs and self.last_branch:
+            log.info(f"Using stacked PR - base branch: {self.last_branch}")
+            return self.last_branch
+        return "main"
 
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
@@ -225,7 +259,15 @@ Before finishing:
                     self.git.run("fetch", "origin", branch)
                     self.git.run("checkout", "-b", branch, f"origin/{branch}")
                 else:
-                    log.info(f"Creating new branch: {branch}")
+                    # Get base branch for stacking
+                    base_branch = self._get_base_branch()
+                    log.info(f"Creating new branch: {branch} from {base_branch}")
+
+                    # Checkout base branch first
+                    self.git.run("checkout", base_branch)
+                    self.git.run("pull", "origin", base_branch)
+
+                    # Create new branch from base
                     self.git.create_branch(branch)
 
             # Build prompt
@@ -287,12 +329,31 @@ Before finishing:
                 f"- **Total tokens:** {state.total_tokens:,}\n"
                 f"- **Estimated cost:** ${state.total_cost_usd:.4f} USD\n"
             )
+
+            # Determine base branch and previous PR for stacking
+            base_branch = self._get_base_branch()
+            previous_pr_number = None
+
+            if self.config.enable_stacked_prs and self.last_branch:
+                # Find PR number for the base branch
+                previous_pr = self.github.get_pr_by_branch(self.last_branch)
+                if previous_pr:
+                    previous_pr_number = previous_pr.number
+                    log.info(f"Stacking on PR #{previous_pr_number} ({self.last_branch})")
+
             pr_url = self.github.create_pull_request(
                 branch, issue,
                 body_suffix=pr_body_suffix,
-                summary=output  # Include Claude Code's summary
+                summary=output,  # Include Claude Code's summary
+                base=base_branch,
+                previous_pr_number=previous_pr_number
             )
             self.github.close_issue(issue, pr_url)
+
+            # Save this branch as last_branch for next stacked PR
+            if self.config.enable_stacked_prs:
+                self._save_last_branch(branch)
+                self.last_branch = branch
 
             # Mark session as completed
             state.completed = True
