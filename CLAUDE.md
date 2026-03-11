@@ -57,6 +57,50 @@ When in doubt: choose the simplest correct solution.
 - Prefer early returns over nested if/else.
 - Max 2-3 levels of nesting.
 
+### Folder Organization
+
+**Keep folders organized and logically structured.**
+
+- **Maximum 8-10 files per folder** before creating subfolders
+- Group related classes into meaningful subfolders
+- Use clear, descriptive subfolder names that reflect their purpose
+
+**Examples:**
+
+If `CAP.Avalonia/ViewModels/` has many files, organize by feature:
+```
+CAP.Avalonia/ViewModels/
+  Analysis/
+    ParameterSweepViewModel.cs
+    OptimizationViewModel.cs
+  Components/
+    ComponentLibraryViewModel.cs
+    PdkManagerViewModel.cs
+  Layout/
+    DesignCanvasViewModel.cs
+    RoutingViewModel.cs
+```
+
+If `Connect-A-Pic-Core/Components/` grows large:
+```
+Connect-A-Pic-Core/Components/
+  Waveguides/
+    WaveguideConnection.cs
+    WaveguideRouter.cs
+  Couplers/
+    GratingCoupler.cs
+    DirectionalCoupler.cs
+  PDK/
+    PdkInfo.cs
+    PdkLoader.cs
+```
+
+**When adding new features:**
+- Check if the target folder already has 8+ files
+- If yes, create or use an appropriate subfolder
+- Follow existing subfolder patterns in the codebase
+- Don't create subfolders with only 1-2 files (wait until there's 3+)
+
 ---
 
 ## 3. Code Style
