@@ -250,7 +250,7 @@ Before finishing:
                 self.git.run("checkout", branch)
                 # Pull latest changes if it's a feature branch
                 if not branch.startswith(self.config.branch_prefix):
-                    self.git.run("pull", "origin", branch)
+                    self.git.run("pull", "--no-rebase", "origin", branch)
             else:
                 # Check if branch exists on remote
                 remote_exists = self.git.run("ls-remote", "--heads", "origin", branch)
@@ -273,7 +273,8 @@ Before finishing:
                         self.last_branch = None
                         self._save_last_branch("")
 
-                    self.git.run("pull", "origin", base_branch)
+                    # Pull with merge strategy to avoid divergent branches error
+                    self.git.run("pull", "--no-rebase", "origin", base_branch)
 
                     # Create new branch from base
                     self.git.create_branch(branch)
