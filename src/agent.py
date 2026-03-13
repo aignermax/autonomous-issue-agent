@@ -47,10 +47,6 @@ class Agent:
         self.claude = ClaudeCode(config.local_path, config.max_turns)
         self.session_manager = SessionManager(config.session_dir)
 
-        # Track last branch for stacked PRs
-        self.last_branch_file = config.session_dir / ".last_branch"
-        self.last_branch: Optional[str] = self._load_last_branch()
-
     def _extract_branch_from_issue(self, issue) -> Optional[str]:
         """
         Extract target branch name from issue body.
@@ -89,35 +85,42 @@ class Agent:
 
         return None
 
-    def _load_last_branch(self) -> Optional[str]:
-        """Load the last branch name from file for stacked PRs."""
-        if self.last_branch_file.exists():
-            try:
-                return self.last_branch_file.read_text().strip()
-            except Exception as e:
-                log.warning(f"Failed to read last branch file: {e}")
-        return None
-
-    def _save_last_branch(self, branch: str):
-        """Save the last branch name for stacked PRs."""
-        try:
-            self.last_branch_file.write_text(branch)
-            log.info(f"Saved last branch for stacking: {branch}")
-        except Exception as e:
-            log.warning(f"Failed to save last branch: {e}")
-
     def _get_base_branch(self) -> str:
         """
         Get the base branch for the next PR.
 
+        If stacked PRs enabled, finds the most recently created open PR
+        created by the agent and uses its head branch as the base.
+
         Returns:
-            - If stacked PRs enabled and last_branch exists: last_branch
+            - If stacked PRs enabled and recent agent PR found: that PR's head branch
             - Otherwise: "main"
         """
-        if self.config.enable_stacked_prs and self.last_branch:
-            log.info(f"Using stacked PR - base branch: {self.last_branch}")
-            return self.last_branch
-        return "main"
+        if not self.config.enable_stacked_prs:
+            return "main"
+
+        # Find the most recent agent PR (sorted by created date, newest first)
+        try:
+            prs = list(self.github.repo.get_pulls(
+                state="open",
+                sort="created",
+                direction="desc"
+            ))
+
+            # Look for the most recent PR created by the agent
+            for pr in prs:
+                # Check if it's an agent PR (title starts with "Agent:")
+                if pr.title.startswith("Agent:"):
+                    log.info(f"Found recent agent PR #{pr.number}: {pr.title}")
+                    log.info(f"Using stacked PR - base branch: {pr.head.ref}")
+                    return pr.head.ref
+
+            log.info("No recent agent PRs found, using main as base")
+            return "main"
+
+        except Exception as e:
+            log.warning(f"Failed to fetch recent PRs for stacking: {e}")
+            return "main"
 
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
@@ -269,9 +272,6 @@ Before finishing:
                         log.warning(f"Base branch {base_branch} doesn't exist, falling back to main")
                         base_branch = "main"
                         self.git.run("checkout", base_branch)
-                        # Reset stacking since base branch was deleted
-                        self.last_branch = None
-                        self._save_last_branch("")
 
                     # Pull with merge strategy to avoid divergent branches error
                     self.git.run("pull", "--no-rebase", "origin", base_branch)
@@ -343,12 +343,12 @@ Before finishing:
             base_branch = self._get_base_branch()
             previous_pr_number = None
 
-            if self.config.enable_stacked_prs and self.last_branch:
+            if self.config.enable_stacked_prs and base_branch != "main":
                 # Find PR number for the base branch
-                previous_pr = self.github.get_pr_by_branch(self.last_branch)
+                previous_pr = self.github.get_pr_by_branch(base_branch)
                 if previous_pr:
                     previous_pr_number = previous_pr.number
-                    log.info(f"Stacking on PR #{previous_pr_number} ({self.last_branch})")
+                    log.info(f"Stacking on PR #{previous_pr_number} ({base_branch})")
 
             # Try to create PR with stacked base, fallback to main if base branch was deleted
             try:
@@ -362,9 +362,7 @@ Before finishing:
             except Exception as e:
                 if "base" in str(e).lower() and "invalid" in str(e).lower():
                     log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to main")
-                    # Reset stacking and create PR targeting main
-                    self.last_branch = None
-                    self._save_last_branch("")
+                    # Create PR targeting main instead
                     pr_url = self.github.create_pull_request(
                         branch, issue,
                         body_suffix=pr_body_suffix,
@@ -376,11 +374,6 @@ Before finishing:
                     raise
 
             self.github.close_issue(issue, pr_url)
-
-            # Save this branch as last_branch for next stacked PR
-            if self.config.enable_stacked_prs:
-                self._save_last_branch(branch)
-                self.last_branch = branch
 
             # Mark session as completed
             state.completed = True
