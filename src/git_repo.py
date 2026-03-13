@@ -76,18 +76,39 @@ class GitRepo:
             message: Commit message
 
         Returns:
-            True if changes were committed, False if no changes
+            True if changes were committed/pushed, False if no changes at all
         """
         self.run("add", ".")
 
         # Check if there are changes to commit
         status = self.run("status", "--porcelain")
-        if not status.stdout.strip():
-            log.info("No changes to commit.")
+        has_uncommitted = bool(status.stdout.strip())
+
+        if has_uncommitted:
+            # Commit the changes
+            self.run("commit", "-m", message)
+            log.info("Changes committed.")
+        else:
+            log.info("No uncommitted changes in working directory.")
+
+        # Check if there are unpushed commits (e.g., from Claude Code)
+        # Compare local branch with remote
+        result = self.run("rev-list", "--count", f"origin/{branch}..{branch}")
+        if result.returncode != 0:
+            # Remote branch doesn't exist yet - we have commits to push
+            unpushed_count = 1
+        else:
+            unpushed_count = int(result.stdout.strip() or "0")
+
+        if unpushed_count > 0:
+            log.info(f"Found {unpushed_count} unpushed commit(s), pushing to origin...")
+            self.run("push", "--set-upstream", "origin", branch)
+            return True
+
+        if not has_uncommitted:
+            log.info("No changes to commit and no unpushed commits.")
             return False
 
-        self.run("commit", "-m", message)
-        self.run("push", "--set-upstream", "origin", branch)
         return True
 
     def cleanup(self) -> None:

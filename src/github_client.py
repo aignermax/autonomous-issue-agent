@@ -28,6 +28,7 @@ class GitHubClient:
     def find_next_issue(self, label: str):
         """
         Find the next open issue with the specified label.
+        Returns the OLDEST issue first (lowest number) to process in order.
 
         Args:
             label: Issue label to filter by
@@ -35,7 +36,7 @@ class GitHubClient:
         Returns:
             Issue object or None if no issues found
         """
-        for issue in self.repo.get_issues(state="open", labels=[label]):
+        for issue in self.repo.get_issues(state="open", labels=[label], sort="created", direction="asc"):
             if not issue.pull_request:
                 return issue
         return None
