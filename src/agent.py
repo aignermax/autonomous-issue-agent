@@ -406,7 +406,7 @@ Before finishing:
         log.info(f"Found issue #{issue.number}: {issue.title}")
 
         # Process with auto-continuation
-        max_sessions = 10  # Prevent infinite loops
+        max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
         for session in range(max_sessions):
             result = self.process_issue(issue)
 
