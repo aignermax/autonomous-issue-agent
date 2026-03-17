@@ -7,8 +7,10 @@
       ],
       "env": {
         "WORKING_DIRECTORY": "/home/aigner/connect-a-pic-agent/repo",
-        "TESTS_DIRECTORY_NAME": "UnitTests"
-      }
+        "TESTS_DIRECTORY_NAME": "UnitTests",
+        "LOGGING__LOGLEVEL__DEFAULT": "Debug"
+      },
+      "logFile": "/home/aigner/connect-a-pic-agent/mcp-dotnet-test.log"
     }
   }
 }
