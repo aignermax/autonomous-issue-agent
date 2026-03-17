@@ -173,13 +173,70 @@ The included `CLAUDE.md` demonstrates:
 
 Adapt these patterns to your own project's needs.
 
+## MCP (Model Context Protocol) Integration
+
+The agent supports **MCP servers** to enhance Claude Code's capabilities. Currently integrated:
+
+### dotnet-test-mcp (for .NET projects)
+
+Provides structured test execution and output parsing, saving tokens and improving test result analysis.
+
+**Prerequisites:**
+- .NET 10 SDK (only on the agent machine, not in target project!)
+- xUnit v3 with MTP v2 (Microsoft Testing Platform) in target project
+
+**Installation:**
+
+```bash
+# Install .NET 10 SDK
+wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
+chmod +x /tmp/dotnet-install.sh
+/tmp/dotnet-install.sh --channel 10.0 --install-dir ~/.dotnet-10
+
+# Clone and build dotnet-test-mcp
+git clone https://github.com/j-d-ha/dotnet-test-mcp.git /tmp/dotnet-test-mcp
+~/.dotnet-10/dotnet build /tmp/dotnet-test-mcp/src/DotnetTest.Mcp/DotnetTest.Mcp.csproj -c Release
+~/.dotnet-10/dotnet pack /tmp/dotnet-test-mcp/src/DotnetTest.Mcp/DotnetTest.Mcp.csproj -c Release -o /tmp/dotnet-test-mcp-package
+~/.dotnet-10/dotnet tool install --global DotnetTest.Mcp --version 0.0.1-beta.4 --add-source /tmp/dotnet-test-mcp-package
+```
+
+**Configuration:**
+
+The `.mcp.json` file is already configured in this repository. Claude Code CLI loads it automatically.
+
+**Target project requirements:**
+
+Your .NET project needs MTP v2 enabled in `global.json`:
+
+```json
+{
+  "sdk": {
+    "version": "8.0.100",
+    "rollForward": "latestMajor"
+  },
+  "test": {
+    "runner": "Microsoft.Testing.Platform"
+  }
+}
+```
+
+**What it does:**
+- `ListTestProjects` - Enumerate test projects
+- `ListTestsSummary` - Get test counts and names
+- `RunSingleTest` - Execute specific test
+- `RunAllTests` - Run entire test suite
+- Returns structured JSON instead of thousands of lines of raw output
+
+**Token savings:** ~70-90% reduction in test output tokens!
+
 ## Future improvements
 
 - [ ] Docker container for isolated execution
 - [ ] Webhooks instead of polling (GitHub → Agent)
-- [ ] Token budget tracking per issue
 - [ ] Multi-issue queue with prioritization
 - [ ] Slack/Discord notifications on PR creation
+- [x] ~~Token budget tracking per issue~~ (✅ Implemented)
+- [x] ~~MCP server integration~~ (✅ dotnet-test-mcp)
 
 ## License
 
