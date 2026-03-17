@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "dotnet-test": {
+      "command": "/home/aigner/.dotnet-10/dotnet",
+      "args": [
+        "/tmp/dotnet-test-mcp/src/DotnetTest.Mcp/bin/Release/net10.0/DotnetTest.Mcp.dll"
+      ],
+      "env": {
+        "WORKING_DIRECTORY": "/home/aigner/connect-a-pic-agent/repo",
+        "TESTS_DIRECTORY_NAME": "UnitTests"
+      }
+    }
+  }
+}
