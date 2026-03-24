@@ -97,7 +97,27 @@ The agent reads `CLAUDE.md` from your repository root to understand your project
 - Build commands (`dotnet build`, `npm test`, `cargo build`, etc.)
 - **Vertical Slice requirement** — ensure PRs include UI + backend + tests
 
-### 4. Start the agent
+### 4. Build MCP Servers (Optional but Recommended)
+
+For .NET projects, build NetContextServer to enable semantic code search:
+
+```bash
+# Initialize and update git submodules
+git submodule update --init --recursive
+
+# Build NetContextServer
+cd mcp-servers/netcontext
+dotnet build
+cd ../..
+```
+
+This enables:
+- **NetContextServer**: Semantic C# code search (~70% token reduction)
+- **dotnet-test-mcp**: Structured test output (~90% token reduction)
+
+If you skip this step, the agent will still work but won't use MCP optimizations.
+
+### 5. Start the agent
 
 ```bash
 # Run continuously (polls every 5 minutes)
@@ -110,7 +130,7 @@ python main.py --once
 ./run_agent.sh
 ```
 
-### 5. Create issues for the agent
+### 6. Create issues for the agent
 
 Create an issue on GitHub with the label `agent-task` (or your custom label from `.env`):
 
@@ -190,7 +210,14 @@ The agent supports **MCP servers** to enhance Claude Code's capabilities. Curren
 
 **Installation:**
 
-NetContextServer is already configured in `.mcp.json`. It will start automatically when the agent runs.
+NetContextServer is included as a git submodule. Build it once:
+
+```bash
+cd mcp-servers/netcontext
+dotnet build
+```
+
+After building, NetContextServer is configured in `.mcp.json` and will start automatically when the agent runs.
 
 **Features available to Claude Code:**
 - Search C# code semantically (with Azure OpenAI - optional)
