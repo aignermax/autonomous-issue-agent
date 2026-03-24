@@ -11,25 +11,67 @@ REPO_PATH="$PROJECT_ROOT/repo"
 echo "🚀 OpenViking Setup for Autonomous Issue Agent"
 echo ""
 
-# Check if .env exists and has OpenAI key
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "❌ Error: .env file not found"
-    echo "Please create .env with OPENAI_API_KEY"
-    exit 1
+# Ask user which embedding provider to use
+echo "Choose embedding provider:"
+echo "  1) Ollama (local, free, slower indexing)"
+echo "  2) OpenAI (paid, fast, requires API key)"
+echo ""
+read -p "Choice [1/2] (default: 1): " EMBEDDING_CHOICE
+EMBEDDING_CHOICE=${EMBEDDING_CHOICE:-1}
+
+if [ "$EMBEDDING_CHOICE" = "2" ]; then
+    # OpenAI mode - check for API key
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        echo "❌ Error: .env file not found"
+        echo "Please create .env with OPENAI_API_KEY"
+        exit 1
+    fi
+
+    source "$PROJECT_ROOT/.env"
+
+    if [ -z "$OPENAI_API_KEY" ]; then
+        echo "❌ Error: OPENAI_API_KEY not set in .env"
+        echo ""
+        echo "Add to .env:"
+        echo "  OPENAI_API_KEY=sk-proj-..."
+        exit 1
+    fi
+
+    echo "✅ Using OpenAI embeddings (fast, paid)"
+    EMBEDDING_PROVIDER="openai"
+    EMBEDDING_API_KEY="$OPENAI_API_KEY"
+    EMBEDDING_API_BASE="https://api.openai.com/v1"
+else
+    # Ollama mode - check if Ollama is running
+    echo "✅ Using Ollama embeddings (free, local)"
+
+    if ! command -v ollama &> /dev/null; then
+        echo "❌ Error: Ollama not installed"
+        echo ""
+        echo "Install Ollama:"
+        echo "  curl -fsSL https://ollama.com/install.sh | sh"
+        echo ""
+        exit 1
+    fi
+
+    # Check if Ollama is running
+    if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+        echo "🚀 Starting Ollama..."
+        ollama serve &
+        sleep 3
+    fi
+
+    # Pull nomic-embed-text model if not present
+    if ! ollama list | grep -q "nomic-embed-text"; then
+        echo "📦 Downloading nomic-embed-text model (~275 MB)..."
+        ollama pull nomic-embed-text
+    fi
+
+    EMBEDDING_PROVIDER="ollama"
+    EMBEDDING_API_KEY="dummy"  # Ollama doesn't need a key
+    EMBEDDING_API_BASE="http://localhost:11434"
 fi
 
-# Source .env to get API key
-source "$PROJECT_ROOT/.env"
-
-if [ -z "$OPENAI_API_KEY" ]; then
-    echo "❌ Error: OPENAI_API_KEY not set in .env"
-    echo ""
-    echo "Add to .env:"
-    echo "  OPENAI_API_KEY=sk-proj-..."
-    exit 1
-fi
-
-echo "✅ Found OpenAI API key in .env"
 echo ""
 
 # Check if OpenViking is already installed
@@ -60,8 +102,9 @@ echo "⚙️  Configuring OpenViking..."
 # Create config directory
 mkdir -p ~/.openviking
 
-# Create OpenViking config
-cat > ~/.openviking/ov.conf <<EOF
+# Create OpenViking config based on provider choice
+if [ "$EMBEDDING_PROVIDER" = "ollama" ]; then
+    cat > ~/.openviking/ov.conf <<EOF
 {
   "storage": {
     "workspace": "$HOME/.openviking/workspace"
@@ -72,8 +115,29 @@ cat > ~/.openviking/ov.conf <<EOF
   },
   "embedding": {
     "dense": {
-      "api_base": "https://api.openai.com/v1",
-      "api_key": "$OPENAI_API_KEY",
+      "api_base": "http://localhost:11434",
+      "provider": "ollama",
+      "dimension": 768,
+      "model": "nomic-embed-text"
+    },
+    "max_concurrent": 4
+  }
+}
+EOF
+else
+    cat > ~/.openviking/ov.conf <<EOF
+{
+  "storage": {
+    "workspace": "$HOME/.openviking/workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"
+  },
+  "embedding": {
+    "dense": {
+      "api_base": "$EMBEDDING_API_BASE",
+      "api_key": "$EMBEDDING_API_KEY",
       "provider": "openai",
       "dimension": 1536,
       "model": "text-embedding-3-small"
@@ -81,13 +145,14 @@ cat > ~/.openviking/ov.conf <<EOF
     "max_concurrent": 10
   },
   "vlm": {
-    "api_base": "https://api.openai.com/v1",
-    "api_key": "$OPENAI_API_KEY",
+    "api_base": "$EMBEDDING_API_BASE",
+    "api_key": "$EMBEDDING_API_KEY",
     "provider": "openai",
     "model": "gpt-4o-mini"
   }
 }
 EOF
+fi
 
 # Create CLI config
 cat > ~/.openviking/ovcli.conf <<EOF
