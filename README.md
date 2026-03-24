@@ -220,12 +220,21 @@ dotnet build
 After building, NetContextServer is configured in `.mcp.json` and will start automatically when the agent runs.
 
 **Features available to Claude Code:**
-- Search C# code semantically (with Azure OpenAI - optional)
-- List all .NET source files in the project
-- Analyze .csproj dependencies
-- Read file contents with context
+- List all .NET source files in the project ✅ (works without API key)
+- Analyze .csproj dependencies ✅ (works without API key)
+- Read file contents with context ✅ (works without API key)
+- Search C# code semantically ⚠️ (requires Azure OpenAI - optional)
 
-**Note:** NetContextServer starts automatically via `.mcp.json` - no manual server setup needed.
+**Semantic Search (Optional):**
+
+To enable semantic code search, add to your `.env`:
+
+```bash
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-azure-openai-key
+```
+
+**Note:** NetContextServer works without Azure OpenAI keys, but semantic search will be disabled.
 
 ---
 
