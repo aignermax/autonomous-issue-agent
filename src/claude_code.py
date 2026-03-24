@@ -146,6 +146,12 @@ class ClaudeCode:
             "--max-turns", str(self.max_turns),
         ]
 
+        # Add MCP config if .mcp.json exists
+        mcp_config = self.working_dir.parent / ".mcp.json"
+        if mcp_config.exists():
+            cmd.extend(["--mcp-config", str(mcp_config)])
+            log.info(f"Using MCP config: {mcp_config}")
+
         # Add resume flag if continuing from previous session
         if resume_file and resume_file.exists():
             cmd.extend(["--resume", str(resume_file)])
