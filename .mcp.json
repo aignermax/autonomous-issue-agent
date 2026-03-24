@@ -1,5 +1,12 @@
 {
   "mcpServers": {
+    "openviking": {
+      "command": "openviking-server",
+      "args": [],
+      "env": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+      }
+    },
     "netcontext": {
       "command": "dotnet",
       "args": [

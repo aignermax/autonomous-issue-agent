@@ -97,9 +97,21 @@ The agent reads `CLAUDE.md` from your repository root to understand your project
 - Build commands (`dotnet build`, `npm test`, `cargo build`, etc.)
 - **Vertical Slice requirement** — ensure PRs include UI + backend + tests
 
-### 4. Build MCP Servers (Optional but Recommended)
+### 4. Setup MCP Servers (Optional but Recommended)
 
-For .NET projects, build NetContextServer to enable semantic code search:
+**OpenViking (for ALL projects):**
+
+```bash
+# Install OpenViking
+pip install openviking
+
+# Index your codebase (this needs to be done once)
+./scripts/index-openviking.sh
+```
+
+This provides **93% token reduction** through semantic code search.
+
+**NetContextServer (for .NET projects):**
 
 ```bash
 # Initialize and update git submodules
@@ -111,9 +123,14 @@ dotnet build
 cd ../..
 ```
 
-This enables:
-- **NetContextServer**: Semantic C# code search (~70% token reduction)
+This enables additional .NET-specific features:
+- **NetContextServer**: C# project analysis, dependency management
 - **dotnet-test-mcp**: Structured test output (~90% token reduction)
+
+**Summary of benefits:**
+- OpenViking: 93% token reduction for code exploration (all languages)
+- NetContextServer: .NET-specific tooling (C# projects only)
+- dotnet-test-mcp: Structured test output (C# projects only)
 
 If you skip this step, the agent will still work but won't use MCP optimizations.
 
@@ -197,7 +214,54 @@ Adapt these patterns to your own project's needs.
 
 The agent supports **MCP servers** to enhance Claude Code's capabilities. Currently integrated:
 
-### NetContextServer (for .NET/C# projects) ⭐ RECOMMENDED
+### OpenViking (Semantic Code Search) ⭐ RECOMMENDED FOR ALL PROJECTS
+
+**What it does:** Universal semantic code search with massive token reduction (93% in real-world usage).
+
+**Benefits:**
+- **93% token reduction** - from 200k tokens to 15k tokens for codebase exploration
+- **Language-agnostic** - works with Python, JavaScript, TypeScript, Rust, Go, C++, and more
+- **Semantic search** - find code by natural language description, not just text matching
+- **Directory overviews** - AI-generated summaries of folder contents
+- **Local embeddings** - uses Ollama (free) or OpenAI for vectorization
+
+**Installation:**
+
+```bash
+# Install OpenViking
+pip install openviking
+
+# Start OpenViking server in background
+openviking-server &
+
+# Index your codebase (for C# projects with unsupported file types)
+cd /path/to/autonomous-issue-agent
+./scripts/index-openviking.sh
+```
+
+**For C# projects (with .axaml/.csproj/.sln files):**
+
+The indexing script uses `--no-strict` flag to allow indexing despite file types that OpenViking doesn't normally support. This allows full C# codebase indexing including Avalonia projects.
+
+**Configuration:**
+
+OpenViking is already configured in `.mcp.json`. Set your OpenAI API key in `.env`:
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+Or use Ollama for free local embeddings (see [OpenViking docs](https://github.com/openviking-ai/openviking)).
+
+**What Claude Code gets:**
+- Semantic search across entire codebase
+- File and directory navigation with AI summaries
+- Context-aware code retrieval
+- Massive reduction in token usage for exploration tasks
+
+---
+
+### NetContextServer (for .NET/C# projects) - Additional .NET Features
 
 **What it does:** Provides semantic code search and .NET-specific analysis for C# codebases.
 
