@@ -177,6 +177,35 @@ Adapt these patterns to your own project's needs.
 
 The agent supports **MCP servers** to enhance Claude Code's capabilities. Currently integrated:
 
+### OpenViking (Semantic Code Search) ⭐ RECOMMENDED
+
+**What it does:** Reduces context from 200k → 15k tokens (~93% reduction) using semantic search.
+
+**Benefits:**
+- **15x faster** responses (~30s → ~2s)
+- **Massive token savings** - only loads relevant files
+- **Hierarchical context** (L0/L1/L2 tiers)
+- **Works with any language/framework**
+
+**One-command setup:**
+
+```bash
+# Add your OpenAI API key to .env first:
+echo "OPENAI_API_KEY=sk-proj-..." >> .env
+
+# Run setup (installs OpenViking, indexes repo, configures MCP)
+./scripts/setup-openviking.sh
+
+# OpenViking will auto-start with the agent
+./run_agent.sh
+```
+
+**Cost:** ~€0.003 for initial indexing, ~€0.0001 per git pull (using OpenAI embeddings)
+
+**Alternative:** Use local Ollama for free (slower indexing, but zero ongoing cost)
+
+---
+
 ### dotnet-test-mcp (for .NET projects)
 
 Provides structured test execution and output parsing, saving tokens and improving test result analysis.
