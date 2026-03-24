@@ -14,11 +14,6 @@ cd /d C:\dev\Akhetonics\autonomous-issue-agent
 REM Unset CLAUDECODE variable to allow nested sessions (use with caution!)
 set CLAUDECODE=
 
-REM Start OpenViking server if configured
-if exist scripts\start-openviking.bat (
-    call scripts\start-openviking.bat
-)
-
 python main.py
 
 pause

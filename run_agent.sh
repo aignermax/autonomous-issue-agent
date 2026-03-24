@@ -104,11 +104,6 @@ else
     echo -e "${GREEN}✓ Claude Code CLI found${NC}"
 fi
 
-# Start OpenViking server if configured
-if [ -f scripts/start-openviking.sh ]; then
-    ./scripts/start-openviking.sh
-fi
-
 echo -e "\n${GREEN}Starting agent...${NC}"
 echo -e "Repository: ${YELLOW}$AGENT_REPO${NC}"
 echo -e "Polling interval: ${YELLOW}${AGENT_POLL_INTERVAL:-300}s${NC}"

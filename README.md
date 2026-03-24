@@ -198,30 +198,7 @@ NetContextServer is already configured in `.mcp.json`. It will start automatical
 - Analyze .csproj dependencies
 - Read file contents with context
 
-**Note:** Currently replaces OpenViking for C# projects due to better .NET support (.axaml, .csproj files).
-
----
-
-### OpenViking (Semantic Code Search)
-
-**Status:** ⚠️ Limited support for .NET projects (no .axaml/.csproj support)
-
-**What it does:** Reduces context from 200k → 15k tokens (~93% reduction) using semantic search.
-
-**One-command setup:**
-
-```bash
-# Add your OpenAI API key to .env first:
-echo "OPENAI_API_KEY=sk-proj-..." >> .env
-
-# Run setup (installs OpenViking, indexes repo, configures MCP)
-./scripts/setup-openviking.sh
-
-# OpenViking will auto-start with the agent
-./run_agent.sh
-```
-
-**Limitation:** Does not index .axaml or .csproj files. For C#/Avalonia projects, use NetContextServer instead.
+**Note:** NetContextServer starts automatically via `.mcp.json` - no manual server setup needed.
 
 ---
 
@@ -307,11 +284,7 @@ cd mcp-servers/netcontext
 dotnet build
 ```
 
-### OpenViking indexing fails
-
-OpenViking currently doesn't support `.axaml` and `.csproj` files. This is expected. The agent will fall back to normal Read/Grep tools for these files.
-
-**Workaround:** We're using NetContextServer for C#/.NET projects instead, which has better .NET support.
+NetContextServer starts automatically when the agent invokes Claude Code CLI - no manual server startup needed.
 
 ## Future improvements
 
