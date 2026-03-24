@@ -177,15 +177,36 @@ Adapt these patterns to your own project's needs.
 
 The agent supports **MCP servers** to enhance Claude Code's capabilities. Currently integrated:
 
-### OpenViking (Semantic Code Search) ⭐ RECOMMENDED
+### NetContextServer (for .NET/C# projects) ⭐ RECOMMENDED
 
-**What it does:** Reduces context from 200k → 15k tokens (~93% reduction) using semantic search.
+**What it does:** Provides semantic code search and .NET-specific analysis for C# codebases.
 
 **Benefits:**
-- **15x faster** responses (~30s → ~2s)
-- **Massive token savings** - only loads relevant files
-- **Hierarchical context** (L0/L1/L2 tiers)
-- **Works with any language/framework**
+- **Semantic code search** - find code by natural language description
+- **Project analysis** - understands .csproj files and dependencies
+- **Coverage analysis** - multi-format support (Coverlet, LCOV, Cobertura)
+- **Package recommendations** - dependency updates and visualization
+- **C# native** - built specifically for .NET ecosystem
+
+**Installation:**
+
+NetContextServer is already configured in `.mcp.json`. It will start automatically when the agent runs.
+
+**Features available to Claude Code:**
+- Search C# code semantically (with Azure OpenAI - optional)
+- List all .NET source files in the project
+- Analyze .csproj dependencies
+- Read file contents with context
+
+**Note:** Currently replaces OpenViking for C# projects due to better .NET support (.axaml, .csproj files).
+
+---
+
+### OpenViking (Semantic Code Search)
+
+**Status:** ⚠️ Limited support for .NET projects (no .axaml/.csproj support)
+
+**What it does:** Reduces context from 200k → 15k tokens (~93% reduction) using semantic search.
 
 **One-command setup:**
 
@@ -200,9 +221,7 @@ echo "OPENAI_API_KEY=sk-proj-..." >> .env
 ./run_agent.sh
 ```
 
-**Cost:** ~€0.003 for initial indexing, ~€0.0001 per git pull (using OpenAI embeddings)
-
-**Alternative:** Use local Ollama for free (slower indexing, but zero ongoing cost)
+**Limitation:** Does not index .axaml or .csproj files. For C#/Avalonia projects, use NetContextServer instead.
 
 ---
 
@@ -258,6 +277,42 @@ Your .NET project needs MTP v2 enabled in `global.json`:
 
 **Token savings:** ~70-90% reduction in test output tokens!
 
+## Troubleshooting
+
+### Agent hangs at "Invoking Claude Code..."
+
+**Problem:** The agent tries to start a nested Claude Code session when run inside an existing Claude Code session (e.g., VSCode extension).
+
+**Solution:** Run the agent in a **separate terminal** outside any Claude Code session:
+
+```bash
+# Exit any VSCode/Claude Code session first
+# Then run in a plain terminal:
+./run_agent.sh
+```
+
+**Why:** Claude Code doesn't support nested sessions. The warning message is correct:
+```
+WARNING: Running inside a Claude Code session!
+This may cause nested session conflicts.
+Recommended: Run in a separate terminal window.
+```
+
+### NetContextServer not found
+
+If you see "NetContextServer not found" errors, rebuild the MCP server:
+
+```bash
+cd mcp-servers/netcontext
+dotnet build
+```
+
+### OpenViking indexing fails
+
+OpenViking currently doesn't support `.axaml` and `.csproj` files. This is expected. The agent will fall back to normal Read/Grep tools for these files.
+
+**Workaround:** We're using NetContextServer for C#/.NET projects instead, which has better .NET support.
+
 ## Future improvements
 
 - [ ] Docker container for isolated execution
@@ -265,7 +320,7 @@ Your .NET project needs MTP v2 enabled in `global.json`:
 - [ ] Multi-issue queue with prioritization
 - [ ] Slack/Discord notifications on PR creation
 - [x] ~~Token budget tracking per issue~~ (✅ Implemented)
-- [x] ~~MCP server integration~~ (✅ dotnet-test-mcp)
+- [x] ~~MCP server integration~~ (✅ dotnet-test-mcp, NetContextServer)
 
 ## License
 
