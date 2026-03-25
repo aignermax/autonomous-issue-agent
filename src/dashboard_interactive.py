@@ -245,14 +245,14 @@ class InteractiveDashboard(BaseDashboard):
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
                 )
             else:
-                # Unix: use nohup and setsid for full detachment
+                # Unix: use start_new_session for full detachment
                 subprocess.Popen(
-                    ["nohup", python_cmd, "main.py"],
-                    stdout=open('/dev/null', 'w'),
-                    stderr=open('/dev/null', 'w'),
+                    [python_cmd, "main.py"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
                     cwd=self.monitor.working_dir,
-                    start_new_session=True,
-                    preexec_fn=os.setsid if hasattr(os, 'setsid') else None
+                    start_new_session=True
                 )
 
             time.sleep(2)
