@@ -218,7 +218,22 @@ Before finishing:
 - Don't read entire files unless necessary - use grep/search first
 - Reuse existing patterns from similar features
 - Test early and often (dotnet build && dotnet test)
-- Keep files under 250 lines (split if needed)"""
+- Keep files under 250 lines (split if needed)
+
+## 🔍 SEMANTIC SEARCH TOOL
+
+You have access to a semantic code search tool that uses AI embeddings to find relevant code:
+
+```bash
+python3 ../tools/semantic_search.py "your search query"
+```
+
+**Examples:**
+- `python3 ../tools/semantic_search.py "ViewModel for analysis features"`
+- `python3 ../tools/semantic_search.py "where is bounding box calculation?"`
+- `python3 ../tools/semantic_search.py "test files for parameter sweeping"`
+
+This is MUCH better than grep for finding relevant code! Use it early and often."""
 
         return prompt
 
