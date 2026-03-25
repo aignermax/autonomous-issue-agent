@@ -136,7 +136,7 @@ class DashboardMonitor:
     def get_agent_status(self) -> AgentStatus:
         """Get current agent status from logs and process"""
         # Check if agent is running
-        info = self.get_process_info("python.*main.py")
+        info = self.get_process_info("main.py")
         if not info:
             return AgentStatus(False, None, None, None, None, "stopped", None)
 
@@ -206,7 +206,7 @@ class DashboardMonitor:
 
                 history.append(IssueHistory(
                     number=data.get("issue_number", 0),
-                    title=data.get("title", "Unknown"),
+                    title="",  # Title not stored in session files
                     completed=data.get("completed", False),
                     pr_url=data.get("pr_url"),
                     total_tokens=data.get("total_tokens", 0),
