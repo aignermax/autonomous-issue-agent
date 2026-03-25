@@ -80,11 +80,13 @@ class DashboardMonitor:
     def get_process_info(self, pattern: str) -> Optional[Tuple[int, datetime]]:
         """Get PID and start time of a process matching pattern"""
         try:
+            # Use LANG=C to get English dates for reliable parsing
             result = subprocess.run(
                 ["ps", "-eo", "pid,lstart,cmd"],
                 capture_output=True,
                 text=True,
-                timeout=2
+                timeout=2,
+                env={**os.environ, 'LANG': 'C'}
             )
 
             for line in result.stdout.split('\n'):
@@ -97,7 +99,8 @@ class DashboardMonitor:
                         try:
                             start_time = datetime.strptime(start_str, "%a %b %d %H:%M:%S %Y")
                             return (pid, start_time)
-                        except:
+                        except Exception as e:
+                            # Fallback: try to use etime instead
                             return (pid, datetime.now())
             return None
         except:
@@ -116,8 +119,11 @@ class DashboardMonitor:
         else:
             servers.append(MCPServerStatus("OpenViking", False, None, None, 1933))
 
-        # NetContextServer
-        info = self.get_process_info("NetContextServer.csproj")
+        # NetContextServer (look for the actual binary, not the dotnet run wrapper)
+        info = self.get_process_info("bin/Debug/net8.0/NetContextServer")
+        if not info:
+            # Fallback to dotnet run command
+            info = self.get_process_info("NetContextServer.csproj")
         if info:
             pid, start_time = info
             uptime = datetime.now() - start_time
@@ -331,7 +337,7 @@ class Dashboard:
                 activity_str = f"{hours}h {mins}m ago ❌"
                 activity_color = "red"
 
-            table.add_row("Last Activity", Text(activity_str, style=activity_color))
+            table.add_row("Last Log Entry", Text(activity_str, style=activity_color))
 
         # CPU Usage
         if status.cpu_percent is not None:
