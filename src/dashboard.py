@@ -127,9 +127,9 @@ class DashboardMonitor:
         if info:
             pid, start_time = info
             uptime = datetime.now() - start_time
-            servers.append(MCPServerStatus("NetContextServer", True, pid, uptime))
+            servers.append(MCPServerStatus("NetContextServer", True, pid, uptime, None))  # stdio, no port
         else:
-            servers.append(MCPServerStatus("NetContextServer", False, None, None))
+            servers.append(MCPServerStatus("NetContextServer", False, None, None, None))
 
         # dotnet-test-mcp (harder to detect - it's spawned by Claude Code)
         info = self.get_process_info("dotnet-test-mcp")
@@ -418,7 +418,13 @@ class Dashboard:
                 else:
                     uptime_str = "-"
 
-                port_str = str(server.port) if server.port else "-"
+                # Show port or communication method
+                if server.port:
+                    port_str = str(server.port)
+                elif server.name in ["NetContextServer", "dotnet-test-mcp"]:
+                    port_str = "stdio"
+                else:
+                    port_str = "-"
             else:
                 # Special handling for dotnet-test-mcp (on-demand tool, not a server)
                 if server.name == "dotnet-test-mcp":
