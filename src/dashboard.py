@@ -212,16 +212,31 @@ class DashboardMonitor:
             except Exception as e:
                 pass
 
-        # Get CPU usage - check claude process if working, agent process if polling
+        # Get CPU usage - check claude child process if working, agent process if polling
         cpu_percent = None
         try:
             target_pid = pid  # Default to agent PID
 
-            # If working on an issue, check claude child process instead
+            # If working on an issue, find claude child process of THIS agent
             if state == "working":
-                claude_info = self.get_process_info("claude")
-                if claude_info:
-                    target_pid = claude_info[0]
+                # Find claude process that is a child of the agent process
+                result = subprocess.run(
+                    ["ps", "-eo", "pid,ppid,cmd"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1,
+                    env={**os.environ, 'LANG': 'C'}
+                )
+                for line in result.stdout.split('\n'):
+                    if 'claude' in line and str(pid) in line:
+                        parts = line.strip().split(None, 2)
+                        if len(parts) >= 2:
+                            claude_pid = int(parts[0])
+                            parent_pid = int(parts[1])
+                            # Check if this claude's parent is our agent
+                            if parent_pid == pid:
+                                target_pid = claude_pid
+                                break
 
             result = subprocess.run(
                 ["ps", "-p", str(target_pid), "-o", "%cpu"],
