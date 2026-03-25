@@ -1,0 +1,20 @@
+{
+  "name": "autonomous-issue-agent",
+  "displayName": "Autonomous Issue Agent",
+  "version": "1.0.0",
+  "description": "Autonomous GitHub issue processing agent with MCP integration. Continuously monitors issues with 'agent-task' label, implements fixes following CLAUDE.md architecture rules, and creates pull requests.",
+  "author": "Max Aigner",
+  "repository": "https://github.com/aignermax/autonomous-issue-agent",
+  "license": "MIT",
+  "keywords": [
+    "github",
+    "automation",
+    "agent",
+    "issues",
+    "pull-requests",
+    "mcp"
+  ],
+  "engines": {
+    "claude-code": ">=1.0.0"
+  }
+}
