@@ -142,6 +142,7 @@ class ClaudeCode:
             self.claude_cli,
             "-p", prompt,
             "--dangerously-skip-permissions",
+            "--permission-mode", "bypassPermissions",  # Allow MCP tool usage
             "--output-format", "json",
             "--max-turns", str(self.max_turns),
         ]
