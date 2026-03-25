@@ -31,83 +31,6 @@ class InteractiveDashboard(BaseDashboard):
         super().__init__(working_dir)
         self.auto_refresh = True
 
-    def get_benchmark_status(self) -> Dict:
-        """Check if benchmark is running and get status"""
-        result = {
-            "running": False,
-            "phase": None,
-            "issue": None
-        }
-
-        try:
-            # Check for benchmark process (cross-platform)
-            if sys.platform == 'win32':
-                # Windows
-                proc_result = subprocess.run(
-                    ["tasklist", "/FI", "IMAGENAME eq python*"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                # Simple check - if python is running, might be benchmark
-                result["running"] = "python" in proc_result.stdout.lower()
-            else:
-                # Unix/Linux
-                proc_result = subprocess.run(
-                    ["ps", "aux"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                for line in proc_result.stdout.split('\n'):
-                    if 'benchmark_mcp.py' in line and 'grep' not in line:
-                        result["running"] = True
-                        # Extract issue number
-                        if '--issue' in line:
-                            parts = line.split('--issue')
-                            if len(parts) > 1:
-                                issue_num = parts[1].strip().split()[0]
-                                result["issue"] = issue_num
-                        break
-
-            # Check agent.log for current phase
-            if result["running"] and self.monitor.agent_log.exists():
-                with open(self.monitor.agent_log, 'r') as f:
-                    lines = f.readlines()[-100:]
-                    for line in reversed(lines):
-                        if "Using MCP config" in line:
-                            result["phase"] = "WITH MCP (Phase 2)"
-                            break
-                        elif "Invoking Claude Code" in line:
-                            # Check if MCP mentioned in recent lines
-                            recent = ''.join(lines[-50:])
-                            if "Using MCP" not in recent:
-                                result["phase"] = "WITHOUT MCP (Phase 1)"
-                            break
-
-        except Exception:
-            pass
-
-        return result
-
-    def create_benchmark_panel(self, status: Dict) -> Panel:
-        """Create benchmark status panel"""
-        if not status["running"]:
-            content = Text("No benchmark running", style="dim")
-            content.append("\n\nPress ", style="dim")
-            content.append("[b]", style="bold green")
-            content.append(" to start benchmark", style="dim")
-        else:
-            content = Text("🔬 Benchmark Running\n", style="bold yellow")
-            if status["issue"]:
-                content.append(f"Issue: #{status['issue']}\n", style="cyan")
-            if status["phase"]:
-                content.append(f"Phase: {status['phase']}\n", style="yellow")
-            else:
-                content.append("Phase: Starting...\n", style="dim")
-            content.append("\n⏱️  Expected: 40-60 minutes total", style="dim")
-
-        return Panel(content, title="🔬 Benchmark Status", border_style="yellow")
 
     def run(self):
         """Run interactive dashboard"""
@@ -122,16 +45,10 @@ class InteractiveDashboard(BaseDashboard):
 
                 # Get status
                 agent_status = self.monitor.get_agent_status()
-                mcp_servers = self.monitor.get_mcp_server_status()
                 history = self.monitor.get_issue_history()
-                benchmark_status = self.get_benchmark_status()
 
                 # Display panels
                 self.console.print(self.create_agent_panel(agent_status))
-                self.console.print()
-                self.console.print(self.create_mcp_panel(mcp_servers))
-                self.console.print()
-                self.console.print(self.create_benchmark_panel(benchmark_status))
                 self.console.print()
                 self.console.print(self.create_history_panel(history))
 
@@ -146,8 +63,6 @@ class InteractiveDashboard(BaseDashboard):
                 menu.append(" Start Agent  ", style="dim")
                 menu.append("[k]", style="bold green")
                 menu.append(" Kill Agent  ", style="dim")
-                menu.append("[b]", style="bold green")
-                menu.append(" Benchmark  ", style="dim")
                 menu.append("[l]", style="bold green")
                 menu.append(" Show Logs  ", style="dim")
                 menu.append("[s]", style="bold green")
@@ -209,8 +124,6 @@ class InteractiveDashboard(BaseDashboard):
                     self.handle_start_agent()
                 elif choice == 'k':
                     self.handle_kill_agent()
-                elif choice == 'b':
-                    self.handle_benchmark()
                 elif choice == 'l':
                     self.handle_logs()
                 elif choice == 's':
@@ -260,42 +173,6 @@ class InteractiveDashboard(BaseDashboard):
             self.console.print("\nPress Enter to continue...", style="dim")
             input()
 
-    def handle_benchmark(self):
-        """Start benchmark"""
-        self.console.print("\n🔬 Starting Benchmark", style="bold yellow")
-        self.console.print("\nEnter issue number (or press Enter to cancel): ", style="cyan", end="")
-
-        issue = input().strip()
-        if issue and issue.isdigit():
-            # Ask if MCP-only mode
-            self.console.print("\nRun MCP-only (uses existing Phase 1 results)? (y/n): ", style="cyan", end="")
-            mcp_only = input().strip().lower() == 'y'
-
-            self.console.print(f"\n✓ Starting benchmark on issue #{issue}...", style="green")
-            if mcp_only:
-                self.console.print("📊 Mode: MCP-only (Phase 2 only)", style="cyan")
-                self.console.print("⏱️  This will take ~15-30 minutes.", style="yellow")
-            else:
-                self.console.print("📊 Mode: Full benchmark (Phase 1 + Phase 2)", style="cyan")
-                self.console.print("⏱️  This will take 40-60 minutes.", style="yellow")
-
-            self.console.print("💡 Use [s] Stream Logs to watch real-time output!\n", style="dim")
-
-            # Start benchmark in background
-            python_cmd = "python" if sys.platform == 'win32' else "venv/bin/python3"
-            cmd = [python_cmd, "benchmark_mcp.py", "--issue", issue, "--repo", "./repo"]
-            if mcp_only:
-                cmd.append("--mcp-only")
-
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=self.monitor.working_dir
-            )
-
-            self.console.print("Press Enter to continue...", style="dim")
-            input()
 
     def handle_kill_agent(self):
         """Kill the agent"""
