@@ -202,11 +202,23 @@ Before finishing:
 
 ## YOUR TASK
 
-1. Read `CLAUDE.md` for architecture patterns
-2. Explore repository structure
-3. Implement complete vertical slice (Core → ViewModel → View → Tests)
-4. Build and test until everything passes
-5. Verify the feature is testable in the UI"""
+1. **First:** Read `CLAUDE.md` for architecture patterns and `CODEBASE_MAP.md` for codebase overview
+2. **Search efficiently:** Use glob patterns to find relevant files instead of reading everything
+   - Example: Use `**/*ViewModel.cs` to find all ViewModels
+   - Example: Use `**/MainWindow.axaml` to find the main UI
+3. **Find similar features:** Search for existing features similar to what you're building
+   - Example: For analysis features, check `Analysis/ParameterSweep*` files
+   - Example: For UI features, check existing ViewModel patterns
+4. **Implement vertical slice:** Core → ViewModel → View → Tests (see CODEBASE_MAP.md)
+5. **Build and test iteratively:** Fix errors immediately, don't accumulate them
+6. **Verify UI:** The feature MUST be testable in the UI (non-negotiable)
+
+## EFFICIENCY TIPS
+
+- Don't read entire files unless necessary - use grep/search first
+- Reuse existing patterns from similar features
+- Test early and often (dotnet build && dotnet test)
+- Keep files under 250 lines (split if needed)"""
 
         return prompt
 
