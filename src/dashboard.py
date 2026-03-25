@@ -292,32 +292,78 @@ class DashboardMonitor:
         )
 
     def get_issue_history(self, limit: int = 5) -> List[IssueHistory]:
-        """Get recent issue history from session files"""
-        history = []
+        """Get recent issue history from agent.log"""
+        history = {}  # Use dict to deduplicate by issue number
 
-        if not self.sessions_dir.exists():
-            return history
-
-        for session_file in self.sessions_dir.glob("issue-*.json"):
+        # Parse agent.log for issue completions
+        if self.agent_log.exists():
             try:
-                with open(session_file, 'r') as f:
-                    data = json.load(f)
+                with open(self.agent_log, 'r') as f:
+                    lines = f.readlines()
 
-                history.append(IssueHistory(
-                    number=data.get("issue_number", 0),
-                    title="",  # Title not stored in session files
-                    completed=data.get("completed", False),
-                    pr_url=data.get("pr_url"),
-                    total_tokens=data.get("total_tokens", 0),
-                    total_cost_usd=data.get("total_cost_usd", 0.0),
-                    session_count=data.get("session_count", 0)
-                ))
+                for i, line in enumerate(lines):
+                    # Look for PR created or issue completion
+                    if "PR created:" in line or "Issue #" in line and "done" in line:
+                        import re
+                        # Extract issue number
+                        issue_match = re.search(r'#(\d+)', line)
+                        if issue_match:
+                            issue_num = int(issue_match.group(1))
+
+                            # Look for token usage in nearby lines
+                            tokens = 0
+                            cost = 0.0
+                            pr_url = None
+
+                            # Search backwards and forwards for token/PR info
+                            for j in range(max(0, i-30), min(len(lines), i+10)):
+                                token_match = re.search(r'Token usage: ([\d,]+) tokens.*cost: \$?([\d.]+)', lines[j])
+                                if token_match:
+                                    tokens = int(token_match.group(1).replace(',', ''))
+                                    cost = float(token_match.group(2))
+
+                                pr_match = re.search(r'https://github.com/[^/]+/[^/]+/pull/(\d+)', lines[j])
+                                if pr_match:
+                                    pr_url = pr_match.group(0)
+
+                            # Only add if we found token info or PR
+                            if tokens > 0 or pr_url:
+                                history[issue_num] = IssueHistory(
+                                    number=issue_num,
+                                    title="",
+                                    completed=True,
+                                    pr_url=pr_url,
+                                    total_tokens=tokens,
+                                    total_cost_usd=cost,
+                                    session_count=1
+                                )
             except:
                 pass
 
+        # Also include ongoing sessions from session files
+        if self.sessions_dir.exists():
+            for session_file in self.sessions_dir.glob("issue-*.json"):
+                try:
+                    with open(session_file, 'r') as f:
+                        data = json.load(f)
+
+                    issue_num = data.get("issue_number", 0)
+                    if issue_num and issue_num not in history:
+                        history[issue_num] = IssueHistory(
+                            number=issue_num,
+                            title="",
+                            completed=data.get("completed", False),
+                            pr_url=data.get("pr_url"),
+                            total_tokens=data.get("total_tokens", 0),
+                            total_cost_usd=data.get("total_cost_usd", 0.0),
+                            session_count=data.get("session_count", 0)
+                        )
+                except:
+                    pass
+
         # Sort by issue number descending
-        history.sort(key=lambda x: x.number, reverse=True)
-        return history[:limit]
+        result = sorted(history.values(), key=lambda x: x.number, reverse=True)
+        return result[:limit]
 
 
 class Dashboard:
