@@ -145,22 +145,7 @@ class DashboardMonitor:
 
         pid, start_time = info
 
-        # Get CPU usage for this process
-        cpu_percent = None
-        try:
-            result = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "%cpu"],
-                capture_output=True,
-                text=True,
-                timeout=1
-            )
-            lines = result.stdout.strip().split('\n')
-            if len(lines) > 1:
-                cpu_percent = float(lines[1].strip())
-        except:
-            pass
-
-        # Parse last lines of agent.log
+        # Parse last lines of agent.log FIRST to determine state
         state = "polling"
         current_issue = None
         next_poll_in = None
@@ -220,6 +205,29 @@ class DashboardMonitor:
 
             except Exception as e:
                 pass
+
+        # Get CPU usage - check claude process if working, agent process if polling
+        cpu_percent = None
+        try:
+            target_pid = pid  # Default to agent PID
+
+            # If working on an issue, check claude child process instead
+            if state == "working":
+                claude_info = self.get_process_info("claude")
+                if claude_info:
+                    target_pid = claude_info[0]
+
+            result = subprocess.run(
+                ["ps", "-p", str(target_pid), "-o", "%cpu"],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                cpu_percent = float(lines[1].strip())
+        except:
+            pass
 
         return AgentStatus(
             True, pid, current_issue, current_turn, max_turns,
