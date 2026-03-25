@@ -137,15 +137,27 @@ If you skip this step, the agent will still work but won't use MCP optimizations
 ### 5. Start the agent
 
 ```bash
-# Run continuously (polls every 5 minutes)
-python main.py
+# Run with dashboard (recommended - opens in new terminal window)
+./run_agent.sh
+
+# Run without dashboard
+./run_agent.sh --no-dashboard
 
 # Run once for testing
-python main.py --once
+./run_agent.sh --once
 
-# Or use the provided script
-./run_agent.sh
+# Or run directly with Python
+python main.py
 ```
+
+**Dashboard features:**
+- 🟢 Real-time agent status (polling, working, error)
+- 📊 MCP server status (OpenViking, NetContextServer, dotnet-test-mcp)
+- 🔄 Current issue being processed
+- 📈 Recent issue history with token usage and costs
+- ⏱️ Countdown to next poll
+
+The dashboard auto-launches in a new terminal window. If it doesn't open automatically, run `./dashboard.sh` manually.
 
 ### 6. Create issues for the agent
 

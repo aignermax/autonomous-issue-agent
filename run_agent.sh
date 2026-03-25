@@ -109,5 +109,37 @@ echo -e "Repository: ${YELLOW}$AGENT_REPO${NC}"
 echo -e "Polling interval: ${YELLOW}${AGENT_POLL_INTERVAL:-300}s${NC}"
 echo -e "Issue label: ${YELLOW}${AGENT_ISSUE_LABEL:-agent-task}${NC}\n"
 
+# Check if --no-dashboard flag is present
+SHOW_DASHBOARD=true
+for arg in "$@"; do
+    if [ "$arg" == "--no-dashboard" ]; then
+        SHOW_DASHBOARD=false
+        # Remove --no-dashboard from arguments
+        set -- "${@/$arg/}"
+        break
+    fi
+done
+
+if [ "$SHOW_DASHBOARD" == "true" ]; then
+    echo -e "${GREEN}Starting agent with dashboard...${NC}\n"
+    echo -e "${YELLOW}Dashboard will launch in a new terminal window.${NC}"
+    echo -e "${YELLOW}If it doesn't open automatically, run: ./dashboard.sh${NC}\n"
+
+    # Try to open dashboard in a new terminal window
+    if command -v gnome-terminal &> /dev/null; then
+        gnome-terminal --title="Agent Dashboard" -- bash -c "source venv/bin/activate && python3 src/dashboard.py; exec bash" &
+    elif command -v xterm &> /dev/null; then
+        xterm -T "Agent Dashboard" -e "bash -c 'source venv/bin/activate && python3 src/dashboard.py; exec bash'" &
+    elif command -v konsole &> /dev/null; then
+        konsole --title "Agent Dashboard" -e bash -c "source venv/bin/activate && python3 src/dashboard.py; exec bash" &
+    else
+        echo -e "${YELLOW}Could not auto-launch dashboard (no terminal emulator found).${NC}"
+        echo -e "${YELLOW}Please run manually in another terminal: ./dashboard.sh${NC}\n"
+    fi
+
+    # Give the dashboard a moment to start
+    sleep 1
+fi
+
 # Run the agent
 python main.py "$@"
