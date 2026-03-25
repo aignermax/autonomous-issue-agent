@@ -150,6 +150,30 @@ If you skip this step, the agent will still work but won't use MCP optimizations
 python main.py
 ```
 
+### 6. Agent Control
+
+Use the control script to manage the agent:
+
+```bash
+# Check agent status (PID, CPU, hung detection)
+./control_agent.sh status
+
+# Kill stuck Claude Code process
+./control_agent.sh kill-claude
+
+# Stop the agent
+./control_agent.sh kill
+
+# Restart the agent
+./control_agent.sh restart
+
+# Tail the logs
+./control_agent.sh logs
+```
+
+The control script includes **automatic hang detection** - it warns if the agent has:
+- CPU < 1% AND no log activity for > 20 minutes
+
 **Dashboard features:**
 - 🟢 Real-time agent status (polling, working, error)
 - 📊 MCP server status (OpenViking, NetContextServer, dotnet-test-mcp)
