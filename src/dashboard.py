@@ -67,6 +67,8 @@ class IssueHistory:
     total_tokens: int
     total_cost_usd: float
     session_count: int
+    timestamp: Optional[datetime] = None
+    duration: Optional[timedelta] = None
 
 
 class DashboardMonitor:
@@ -291,7 +293,7 @@ class DashboardMonitor:
             duplicate_count
         )
 
-    def get_issue_history(self, limit: int = 5) -> List[IssueHistory]:
+    def get_issue_history(self, limit: int = 10) -> List[IssueHistory]:
         """Get recent issue history from agent.log"""
         history = {}  # Use dict to deduplicate by issue number
 
@@ -301,22 +303,32 @@ class DashboardMonitor:
                 with open(self.agent_log, 'r') as f:
                     lines = f.readlines()
 
+                import re
                 for i, line in enumerate(lines):
-                    # Look for PR created or issue completion
-                    if "PR created:" in line or "Issue #" in line and "done" in line:
-                        import re
-                        # Extract issue number
+                    # Look for issue completion
+                    if "Issue #" in line and "done" in line:
+                        # Extract issue number and timestamp
                         issue_match = re.search(r'#(\d+)', line)
+                        timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+
                         if issue_match:
                             issue_num = int(issue_match.group(1))
+                            timestamp = None
+                            if timestamp_match:
+                                try:
+                                    timestamp = datetime.strptime(timestamp_match.group(1), "%Y-%m-%d %H:%M:%S")
+                                except:
+                                    pass
 
-                            # Look for token usage in nearby lines
+                            # Look for token usage, PR info, and session start in nearby lines
                             tokens = 0
                             cost = 0.0
                             pr_url = None
+                            session_start = None
+                            duration = None
 
-                            # Search backwards and forwards for token/PR info
-                            for j in range(max(0, i-30), min(len(lines), i+10)):
+                            # Search backwards for token/PR/session info
+                            for j in range(max(0, i-50), min(len(lines), i+5)):
                                 token_match = re.search(r'Token usage: ([\d,]+) tokens.*cost: \$?([\d.]+)', lines[j])
                                 if token_match:
                                     tokens = int(token_match.group(1).replace(',', ''))
@@ -325,6 +337,16 @@ class DashboardMonitor:
                                 pr_match = re.search(r'https://github.com/[^/]+/[^/]+/pull/(\d+)', lines[j])
                                 if pr_match:
                                     pr_url = pr_match.group(0)
+
+                                # Look for session start to calculate duration
+                                if f"issue #{issue_num}" in lines[j].lower() and "Starting new session" in lines[j]:
+                                    start_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', lines[j])
+                                    if start_match and timestamp:
+                                        try:
+                                            session_start = datetime.strptime(start_match.group(1), "%Y-%m-%d %H:%M:%S")
+                                            duration = timestamp - session_start
+                                        except:
+                                            pass
 
                             # Only add if we found token info or PR
                             if tokens > 0 or pr_url:
@@ -335,7 +357,9 @@ class DashboardMonitor:
                                     pr_url=pr_url,
                                     total_tokens=tokens,
                                     total_cost_usd=cost,
-                                    session_count=1
+                                    session_count=1,
+                                    timestamp=timestamp,
+                                    duration=duration
                                 )
             except:
                 pass
@@ -536,24 +560,65 @@ class Dashboard:
             return Panel(content, title="Recent Issues", border_style="blue")
 
         table = Table(show_header=True, box=None)
-        table.add_column("#", style="cyan", width=5)
-        table.add_column("Status", justify="center", width=6)
-        table.add_column("Tokens", justify="right", width=10)
-        table.add_column("Cost", justify="right", width=8)
-        table.add_column("Sessions", justify="right", width=8)
+        table.add_column("Issue", style="cyan", width=6)
+        table.add_column("PR", style="green", width=6)
+        table.add_column("✓", justify="center", width=3)
+        table.add_column("Duration", justify="right", width=9)
+        table.add_column("Tokens", justify="right", width=9)
+        table.add_column("Cost", justify="right", width=7)
+        table.add_column("When", justify="right", width=12)
 
         for issue in history:
+            issue_str = f"#{issue.number}"
+
+            # Extract PR number from URL
+            pr_str = "-"
+            if issue.pr_url:
+                import re
+                pr_match = re.search(r'/pull/(\d+)', issue.pr_url)
+                if pr_match:
+                    pr_str = f"#{pr_match.group(1)}"
+
+            # Status emoji
             status = "✅" if issue.completed else "⏳"
+
+            # Duration
+            duration_str = "-"
+            if issue.duration:
+                total_mins = int(issue.duration.total_seconds() / 60)
+                if total_mins < 60:
+                    duration_str = f"{total_mins}m"
+                else:
+                    hours = total_mins // 60
+                    mins = total_mins % 60
+                    duration_str = f"{hours}h{mins}m"
+
+            # Tokens and cost
             tokens_str = f"{issue.total_tokens:,}" if issue.total_tokens > 0 else "-"
             cost_str = f"${issue.total_cost_usd:.2f}" if issue.total_cost_usd > 0 else "-"
-            sessions_str = str(issue.session_count) if issue.session_count > 0 else "-"
+
+            # Timestamp (relative time)
+            when_str = "-"
+            if issue.timestamp:
+                delta = datetime.now() - issue.timestamp
+                hours_ago = int(delta.total_seconds() / 3600)
+                if hours_ago < 1:
+                    mins_ago = int(delta.total_seconds() / 60)
+                    when_str = f"{mins_ago}m ago"
+                elif hours_ago < 24:
+                    when_str = f"{hours_ago}h ago"
+                else:
+                    days_ago = hours_ago // 24
+                    when_str = f"{days_ago}d ago"
 
             table.add_row(
-                f"#{issue.number}",
+                issue_str,
+                pr_str,
                 status,
+                duration_str,
                 tokens_str,
                 cost_str,
-                sessions_str
+                when_str
             )
 
         return Panel(table, title="Recent Issues", border_style="blue")
