@@ -5,13 +5,15 @@ An autonomous agent that implements GitHub Issues using Claude Code.
 Supports multi-session persistence for complex, long-running tasks.
 
 Usage:
-    python main.py          # Run continuously (polling mode)
-    python main.py --once   # Run once and exit
+    python main.py                  # Run continuously (polling mode)
+    python main.py --once           # Run once and exit
+    python main.py --once 242       # Process specific issue and exit
 """
 
 import sys
 import logging
 import os
+import argparse
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -42,6 +44,12 @@ log = logging.getLogger("agent")
 
 def main():
     """Main entry point."""
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Autonomous Issue Agent")
+    parser.add_argument("--once", nargs='?', const=True, type=int,
+                        help="Run once and exit (optionally specify issue number)")
+    args = parser.parse_args()
+
     # Warn if running inside Claude Code session
     if os.environ.get("CLAUDECODE"):
         log.warning("=" * 60)
@@ -50,7 +58,7 @@ def main():
         log.warning("Recommended: Run in a separate terminal window.")
         log.warning("=" * 60)
         # Don't exit - user might have unset it intentionally via .bat file
-    
+
     # Load configuration
     config = Config()
 
@@ -67,9 +75,13 @@ def main():
     agent = Agent(config)
 
     # Run mode
-    if "--once" in sys.argv:
-        log.info("Running in single-iteration mode")
-        agent.run_once()
+    if args.once is not None:
+        if isinstance(args.once, int):
+            log.info(f"Running in single-issue mode for issue #{args.once}")
+            agent.run_single_issue(args.once)
+        else:
+            log.info("Running in single-iteration mode")
+            agent.run_once()
     else:
         log.info("Running in continuous polling mode")
         agent.run_forever()

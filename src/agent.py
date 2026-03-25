@@ -448,6 +448,38 @@ Before finishing:
             log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
+    def run_single_issue(self, issue_number: int) -> None:
+        """Process a specific issue by number (for benchmarking)."""
+        try:
+            issue = self.github.repo.get_issue(issue_number)
+        except Exception as e:
+            log.error(f"Could not fetch issue #{issue_number}: {e}")
+            return
+
+        if issue.state != "open":
+            log.warning(f"Issue #{issue_number} is not open (state: {issue.state})")
+            # Continue anyway for benchmarking purposes
+
+        log.info(f"Processing issue #{issue.number}: {issue.title}")
+
+        # Process with auto-continuation
+        max_sessions = 20
+        for session in range(max_sessions):
+            result = self.process_issue(issue)
+
+            if result.success:
+                log.info(f"Issue #{issue.number} done → {result.pr_url}")
+                break
+
+            if result.needs_continuation:
+                log.info(f"Session {session + 1} done, continuing...")
+                time.sleep(3)
+                continue
+
+            # Failed without continuation
+            log.error(f"Issue #{issue.number} failed: {result.error}")
+            break
+
     def run_forever(self) -> None:
         """Poll loop — runs until killed."""
         log.info(f"Agent started. Polling every {self.config.poll_interval}s.")
