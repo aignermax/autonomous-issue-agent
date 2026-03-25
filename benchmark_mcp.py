@@ -136,11 +136,23 @@ class MCPBenchmark:
         if not venv_python.exists():
             venv_python = "python3"  # Fallback to system python
 
+        # Load environment variables from .env file
+        env = os.environ.copy()
+        env_file = self.working_dir / ".env"
+        if env_file.exists():
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        env[key.strip()] = value.strip()
+
         result = subprocess.run(
             [str(venv_python), "main.py", "--once", str(self.issue_number)],
             capture_output=True,
             text=True,
             cwd=self.working_dir,
+            env=env,  # Pass environment variables
             timeout=3600  # 1 hour timeout
         )
 
