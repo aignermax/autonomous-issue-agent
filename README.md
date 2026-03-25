@@ -97,35 +97,13 @@ The agent reads `CLAUDE.md` from your repository root to understand your project
 - Build commands (`dotnet build`, `npm test`, `cargo build`, etc.)
 - **Vertical Slice requirement** — ensure PRs include UI + backend + tests
 
-### 4. Setup MCP Servers (Optional but Recommended)
+### 4. MCP Servers (Currently Not Supported)
 
-**OpenViking (for ALL projects):**
+**Note:** MCP (Model Context Protocol) is currently **not compatible** with the agent's subprocess automation approach. MCP works great in interactive Claude Code sessions but hangs when used in automated subprocess calls.
 
-```bash
-# Install OpenViking
-pip install openviking
+**Future:** A Claude Code plugin architecture is being explored that would allow direct MCP access without subprocess limitations. See [MCP_TESTING.md](MCP_TESTING.md) for details.
 
-# Index your codebase (this needs to be done once)
-./scripts/index-openviking.sh
-```
-
-This provides **93% token reduction** through semantic code search.
-
-**NetContextServer (for .NET projects):**
-
-```bash
-# Initialize and update git submodules
-git submodule update --init --recursive
-
-# Build NetContextServer
-cd mcp-servers/netcontext
-dotnet build
-cd ../..
-```
-
-This enables additional .NET-specific features:
-- **NetContextServer**: C# project analysis, dependency management
-- **dotnet-test-mcp**: Structured test output (~90% token reduction)
+**Current status:** Agent runs reliably without MCP using standard headless mode (~23k tokens per issue).
 
 **Summary of benefits:**
 - OpenViking: 93% token reduction for code exploration (all languages)
@@ -150,38 +128,36 @@ If you skip this step, the agent will still work but won't use MCP optimizations
 python main.py
 ```
 
-### 6. Agent Control
+### 6. Interactive Dashboard (Recommended)
 
-Use the control script to manage the agent:
+The interactive dashboard provides full agent control:
 
 ```bash
-# Check agent status (PID, CPU, hung detection)
-./control_agent.sh status
-
-# Kill stuck Claude Code process
-./control_agent.sh kill-claude
-
-# Stop the agent
-./control_agent.sh kill
-
-# Restart the agent
-./control_agent.sh restart
-
-# Tail the logs
-./control_agent.sh logs
+./dashboard_interactive.sh
 ```
 
-The control script includes **automatic hang detection** - it warns if the agent has:
-- CPU < 1% AND no log activity for > 20 minutes
+**Commands:**
+- `[g]` Start Agent - Launch agent in continuous mode
+- `[k]` Kill Agent - Stop running agent
+- `[b]` Benchmark - Test with/without MCP (experimental)
+- `[s]` Stream Logs - Watch real-time agent output
+- `[l]` Show Logs - View recent log entries
+- `[r]` Refresh - Update dashboard display
+- `[a]` Auto-refresh - Toggle automatic updates
+- `[q]` Quit - Exit dashboard
 
 **Dashboard features:**
 - 🟢 Real-time agent status (polling, working, error)
-- 📊 MCP server status (OpenViking, NetContextServer, dotnet-test-mcp)
 - 🔄 Current issue being processed
 - 📈 Recent issue history with token usage and costs
-- ⏱️ Countdown to next poll
+- 📊 Benchmark results and comparisons
 
-The dashboard auto-launches in a new terminal window. If it doesn't open automatically, run `./dashboard.sh` manually.
+**Alternative (manual start):**
+```bash
+# Start agent manually
+source venv/bin/activate
+python3 main.py
+```
 
 ### 6. Create issues for the agent
 

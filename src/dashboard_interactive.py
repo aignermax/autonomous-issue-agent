@@ -142,10 +142,12 @@ class InteractiveDashboard(BaseDashboard):
                 menu.append("Commands: ", style="bold cyan")
                 menu.append("[r]", style="bold green")
                 menu.append(" Refresh  ", style="dim")
-                menu.append("[b]", style="bold green")
-                menu.append(" Start Benchmark  ", style="dim")
+                menu.append("[g]", style="bold green")
+                menu.append(" Start Agent  ", style="dim")
                 menu.append("[k]", style="bold green")
                 menu.append(" Kill Agent  ", style="dim")
+                menu.append("[b]", style="bold green")
+                menu.append(" Benchmark  ", style="dim")
                 menu.append("[l]", style="bold green")
                 menu.append(" Show Logs  ", style="dim")
                 menu.append("[s]", style="bold green")
@@ -203,10 +205,12 @@ class InteractiveDashboard(BaseDashboard):
                     continue
                 elif choice == 'a':
                     self.auto_refresh = not self.auto_refresh
-                elif choice == 'b':
-                    self.handle_benchmark()
+                elif choice == 'g':
+                    self.handle_start_agent()
                 elif choice == 'k':
                     self.handle_kill_agent()
+                elif choice == 'b':
+                    self.handle_benchmark()
                 elif choice == 'l':
                     self.handle_logs()
                 elif choice == 's':
@@ -214,6 +218,33 @@ class InteractiveDashboard(BaseDashboard):
 
         except KeyboardInterrupt:
             self.console.print("\n\n👋 Dashboard stopped", style="yellow")
+
+    def handle_start_agent(self):
+        """Start the autonomous agent"""
+        self.console.print("\n🤖 Starting Autonomous Agent", style="bold yellow")
+        self.console.print("\nThis will start the agent in continuous mode,", style="dim")
+        self.console.print("automatically working on open issues.\n", style="dim")
+        self.console.print("Confirm? (y/n): ", style="cyan", end="")
+
+        confirm = input().strip().lower()
+        if confirm == 'y':
+            self.console.print("\n✓ Starting agent...", style="green")
+            self.console.print("💡 Use [s] Stream Logs to watch progress!", style="dim")
+            self.console.print("💡 Use [k] Kill Agent to stop it.\n", style="dim")
+
+            # Start agent in background
+            python_cmd = "python" if sys.platform == 'win32' else "venv/bin/python3"
+            subprocess.Popen(
+                [python_cmd, "main.py"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=self.monitor.working_dir
+            )
+
+            time.sleep(2)
+            self.console.print("✅ Agent started in background!", style="green")
+            self.console.print("\nPress Enter to continue...", style="dim")
+            input()
 
     def handle_benchmark(self):
         """Start benchmark"""
