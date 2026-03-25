@@ -122,7 +122,7 @@ class InteractiveDashboard(BaseDashboard):
 
                 # Get status
                 agent_status = self.monitor.get_agent_status()
-                mcp_servers = self.monitor.get_mcp_servers()
+                mcp_servers = self.monitor.get_mcp_server_status()
                 history = self.monitor.get_issue_history()
                 benchmark_status = self.get_benchmark_status()
 
