@@ -83,20 +83,31 @@ class MCPBenchmark:
 
     def find_issue_base_commit(self) -> Optional[str]:
         """Find the commit before the issue was solved"""
-        # Look for the PR that solved this issue
-        result = subprocess.run(
-            ["gh", "issue", "view", str(self.issue_number), "--json", "closedAt,timelineItems"],
-            capture_output=True,
-            text=True,
-            cwd=self.repo_path
-        )
+        print(f"Looking for the PR that fixed issue #{self.issue_number}...")
 
-        if result.returncode != 0:
-            print(f"⚠ Could not find issue #{self.issue_number}")
-            return None
+        # Try using gh CLI if available
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "list", "--state", "all", "--search", f"#{self.issue_number}", "--json", "mergeCommit,baseRefOid"],
+                capture_output=True,
+                text=True,
+                cwd=self.repo_path
+            )
 
-        # For now, return current HEAD^ (one commit before)
-        # TODO: Better logic to find the exact commit before the fix
+            if result.returncode == 0:
+                import json
+                prs = json.loads(result.stdout)
+                if prs:
+                    # Use the base commit (before the PR was merged)
+                    base_commit = prs[0].get("baseRefOid")
+                    if base_commit:
+                        print(f"✓ Found base commit from PR: {base_commit[:8]}")
+                        return base_commit
+        except FileNotFoundError:
+            print("⚠ GitHub CLI (gh) not found - using simple HEAD^ fallback")
+
+        # Fallback: Use HEAD^ (one commit before current)
+        print("Using HEAD^ as base commit (commit before current HEAD)")
         result = subprocess.run(
             ["git", "-C", str(self.repo_path), "rev-parse", "HEAD^"],
             capture_output=True,
@@ -222,6 +233,34 @@ class MCPBenchmark:
         print(f"\n🔬 MCP Benchmark Tool")
         print(f"Issue: #{self.issue_number}")
         print(f"Repo: {self.repo_path}\n")
+
+        # Check if issue is closed
+        print(f"Checking if issue #{self.issue_number} is closed...")
+        from src.github_client import GitHubClient
+        from src.config import Config
+        import sys
+        sys.path.insert(0, str(self.working_dir))
+
+        try:
+            config = Config()
+            github = GitHubClient(config.repo_name)
+            issue = github.repo.get_issue(self.issue_number)
+
+            if issue.state == "open":
+                print(f"\n⚠️  WARNING: Issue #{self.issue_number} is still OPEN!")
+                print(f"Benchmarking works best on CLOSED issues because:")
+                print(f"  1. We know the issue CAN be solved")
+                print(f"  2. We can reset to the commit BEFORE the fix")
+                print(f"  3. Both runs will solve the same problem")
+                print(f"\nRecommended: Use a closed issue like #248, #244, or #243")
+                print(f"\nContinue anyway? (y/n): ", end="")
+                response = input().strip().lower()
+                if response != 'y':
+                    print("Benchmark cancelled.")
+                    return
+        except Exception as e:
+            print(f"⚠ Could not check issue status: {e}")
+            print("Continuing anyway...\n")
 
         try:
             # Backup MCP config
