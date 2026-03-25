@@ -3,3 +3,4 @@ pytest>=7.4.0
 pytest-mock>=3.12.0
 python-dotenv>=1.0.0
 openviking>=0.1.0
+rich>=13.7.0
