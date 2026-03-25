@@ -148,6 +148,8 @@ class InteractiveDashboard(BaseDashboard):
                 menu.append(" Kill Agent  ", style="dim")
                 menu.append("[l]", style="bold green")
                 menu.append(" Show Logs  ", style="dim")
+                menu.append("[s]", style="bold green")
+                menu.append(" Stream Logs  ", style="dim")
                 menu.append("[a]", style="bold green")
                 menu.append(" Auto-refresh: ", style="dim")
                 menu.append("ON" if self.auto_refresh else "OFF", style="green" if self.auto_refresh else "red")
@@ -207,6 +209,8 @@ class InteractiveDashboard(BaseDashboard):
                     self.handle_kill_agent()
                 elif choice == 'l':
                     self.handle_logs()
+                elif choice == 's':
+                    self.handle_stream_logs()
 
         except KeyboardInterrupt:
             self.console.print("\n\n👋 Dashboard stopped", style="yellow")
@@ -218,14 +222,28 @@ class InteractiveDashboard(BaseDashboard):
 
         issue = input().strip()
         if issue and issue.isdigit():
+            # Ask if MCP-only mode
+            self.console.print("\nRun MCP-only (uses existing Phase 1 results)? (y/n): ", style="cyan", end="")
+            mcp_only = input().strip().lower() == 'y'
+
             self.console.print(f"\n✓ Starting benchmark on issue #{issue}...", style="green")
-            self.console.print("⏱️  This will take 40-60 minutes.", style="yellow")
-            self.console.print("💡 You can close this dashboard and check back later.\n", style="dim")
+            if mcp_only:
+                self.console.print("📊 Mode: MCP-only (Phase 2 only)", style="cyan")
+                self.console.print("⏱️  This will take ~15-30 minutes.", style="yellow")
+            else:
+                self.console.print("📊 Mode: Full benchmark (Phase 1 + Phase 2)", style="cyan")
+                self.console.print("⏱️  This will take 40-60 minutes.", style="yellow")
+
+            self.console.print("💡 Use [s] Stream Logs to watch real-time output!\n", style="dim")
 
             # Start benchmark in background
             python_cmd = "python" if sys.platform == 'win32' else "venv/bin/python3"
+            cmd = [python_cmd, "benchmark_mcp.py", "--issue", issue, "--repo", "./repo"]
+            if mcp_only:
+                cmd.append("--mcp-only")
+
             subprocess.Popen(
-                [python_cmd, "benchmark_mcp.py", "--issue", issue, "--repo", "./repo"],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 cwd=self.monitor.working_dir
@@ -267,6 +285,35 @@ class InteractiveDashboard(BaseDashboard):
         self.console.print("\n" + "═" * 80, style="dim")
         self.console.print("\nPress Enter to continue...", style="dim")
         input()
+
+    def handle_stream_logs(self):
+        """Stream logs in real-time (tail -f)"""
+        os.system('cls' if sys.platform == 'win32' else 'clear')
+        self.console.print("\n📡 Streaming Agent Logs (Ctrl+C to stop)\n", style="bold cyan")
+        self.console.print("═" * 80 + "\n", style="dim")
+
+        if not self.monitor.agent_log.exists():
+            self.console.print("No log file found", style="red")
+            time.sleep(2)
+            return
+
+        # Use tail -f on Unix, or manual polling on Windows
+        try:
+            if sys.platform != 'win32':
+                subprocess.run(["tail", "-f", str(self.monitor.agent_log)])
+            else:
+                # Windows: manual tail -f implementation
+                with open(self.monitor.agent_log, 'r') as f:
+                    f.seek(0, 2)  # Go to EOF
+                    while True:
+                        line = f.readline()
+                        if line:
+                            print(line.rstrip())
+                        else:
+                            time.sleep(0.1)
+        except KeyboardInterrupt:
+            self.console.print("\n\n✓ Stopped streaming", style="green")
+            time.sleep(1)
 
 
 def main():

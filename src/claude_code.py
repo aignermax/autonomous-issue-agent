@@ -6,8 +6,11 @@ import subprocess
 import logging
 import re
 import os
+import pty
+import select
 import shutil
 import platform
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 from dataclasses import dataclass
@@ -129,7 +132,7 @@ class ClaudeCode:
 
     def execute(self, prompt: str, resume_file: Optional[Path] = None) -> Tuple[str, bool, UsageStats]:
         """
-        Run a prompt through Claude Code headless mode.
+        Run a prompt through Claude Code in headless JSON mode.
 
         Args:
             prompt: The prompt to execute
@@ -138,34 +141,21 @@ class ClaudeCode:
         Returns:
             Tuple of (output string, reached_max_turns, usage_stats)
         """
-        # Check if MCP is available
-        mcp_config = self.working_dir.parent / ".mcp.json"
-        has_mcp = mcp_config.exists()
+        log.info("Invoking Claude Code in headless JSON mode...")
 
         cmd = [
             self.claude_cli,
             "-p", prompt,
             "--output-format", "json",
             "--max-turns", str(self.max_turns),
+            "--dangerously-skip-permissions"
         ]
-
-        # IMPORTANT: --dangerously-skip-permissions is incompatible with MCP!
-        # It causes Claude Code to hang when MCP servers are enabled.
-        # Only use it when MCP is disabled.
-        if not has_mcp:
-            cmd.append("--dangerously-skip-permissions")
-
-        # Add MCP config if available
-        if has_mcp:
-            cmd.extend(["--mcp-config", str(mcp_config)])
-            log.info(f"Using MCP config: {mcp_config}")
 
         # Add resume flag if continuing from previous session
         if resume_file and resume_file.exists():
             cmd.extend(["--resume", str(resume_file)])
             log.info(f"Resuming from session file: {resume_file}")
 
-        log.info("Invoking Claude Code ...")
         result = subprocess.run(
             cmd,
             cwd=self.working_dir,
@@ -208,3 +198,166 @@ class ClaudeCode:
             cache_read_tokens=usage_data.get("cache_read_tokens", 0),
             cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
         )
+
+    def execute_interactive(self, prompt: str, resume_file: Optional[Path] = None, stream_output: bool = False) -> Tuple[str, bool, UsageStats]:
+        """
+        Run Claude Code in INTERACTIVE mode with pseudo-TTY to enable MCP support.
+
+        This method uses a PTY (pseudo-terminal) to run Claude Code in interactive mode,
+        which is required for MCP to function properly. The headless JSON mode hangs with MCP.
+
+        Args:
+            prompt: The prompt to execute
+            resume_file: Optional state file to resume from previous session
+            stream_output: If True, print output to console in real-time
+
+        Returns:
+            Tuple of (output string, reached_max_turns, usage_stats)
+        """
+        # Check if MCP is available
+        mcp_config = self.working_dir.parent / ".mcp.json"
+        has_mcp = mcp_config.exists()
+
+        # Build command - NO -p flag for interactive mode!
+        cmd = [
+            self.claude_cli,
+            "--max-turns", str(self.max_turns),
+            "--permission-mode", "bypassPermissions",
+        ]
+
+        # Add MCP config if available
+        if has_mcp:
+            cmd.extend(["--mcp-config", str(mcp_config)])
+            log.info(f"Using MCP config (interactive mode): {mcp_config}")
+
+        # Add resume flag if continuing from previous session
+        if resume_file and resume_file.exists():
+            cmd.extend(["--resume", str(resume_file)])
+            log.info(f"Resuming from session file: {resume_file}")
+
+        log.info("Invoking Claude Code in interactive mode with PTY...")
+
+        # Create pseudo-TTY
+        master, slave = pty.openpty()
+
+        try:
+            # Start Claude Code in interactive mode
+            process = subprocess.Popen(
+                cmd,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                cwd=self.working_dir,
+                close_fds=True
+            )
+
+            os.close(slave)  # Close slave end in parent process
+
+            # Wait for Claude to start and show initial prompts
+            time.sleep(3)
+
+            # Auto-answer the "Bypass Permissions" warning (option 2 = Yes, I accept)
+            # We need to send Enter to select option 2 (which is already highlighted)
+            try:
+                os.write(master, b"\x1b[B")  # Down arrow to option 2
+                time.sleep(0.5)
+                os.write(master, b"\n")  # Enter to confirm
+                time.sleep(2)
+            except OSError:
+                pass  # May not appear every time
+
+            # Send the actual prompt
+            os.write(master, (prompt + "\n").encode())
+
+            # Read output
+            output_lines = []
+            start_time = time.time()
+            timeout = 3600  # 1 hour safety timeout
+
+            while time.time() - start_time < timeout:
+                # Check if process is still running
+                if process.poll() is not None:
+                    log.info("Claude Code process exited")
+                    break
+
+                # Check if there's data to read (with 1 second timeout)
+                ready, _, _ = select.select([master], [], [], 1.0)
+
+                if ready:
+                    try:
+                        data = os.read(master, 4096)
+                        if data:
+                            text = data.decode('utf-8', errors='replace')
+                            output_lines.append(text)
+                            # Stream to console if requested
+                            if stream_output:
+                                print(text, end='', flush=True)
+                        else:
+                            break  # EOF
+                    except OSError:
+                        break
+
+            # Terminate process if still running
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+            # Combine output
+            full_output = ''.join(output_lines)
+
+            # Parse the interactive output to extract results and usage
+            cleaned_output = self._clean_terminal_output(full_output)
+            reached_max_turns = "reached max turns" in cleaned_output.lower() or "max turns" in cleaned_output.lower()
+            usage = self._parse_interactive_usage(full_output)
+
+            log.info(
+                f"Token usage: {usage.total_tokens} tokens, "
+                f"Estimated cost: ${usage.estimated_cost_usd:.4f}"
+            )
+
+            return cleaned_output, reached_max_turns, usage
+
+        finally:
+            os.close(master)
+
+    def _clean_terminal_output(self, raw_output: str) -> str:
+        """Remove ANSI escape codes and terminal control sequences from output."""
+        # Remove ANSI escape codes
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        cleaned = ansi_escape.sub('', raw_output)
+
+        # Remove common terminal control sequences
+        cleaned = re.sub(r'\[\?[0-9]+[hl]', '', cleaned)  # Private mode set/reset
+        cleaned = re.sub(r'\x0d', '', cleaned)  # Carriage returns
+
+        return cleaned
+
+    def _parse_interactive_usage(self, output: str) -> UsageStats:
+        """
+        Parse usage statistics from interactive terminal output.
+
+        Claude Code may display usage info in various formats in interactive mode.
+        We look for patterns like "X tokens" or usage summaries.
+        """
+        # Try to find token usage patterns in output
+        # Example: "Used 15,234 tokens"
+        token_match = re.search(r'(\d+[,\d]*)\s+tokens', output, re.IGNORECASE)
+        if token_match:
+            tokens_str = token_match.group(1).replace(',', '')
+            try:
+                total_tokens = int(tokens_str)
+                # Estimate breakdown (80% input, 20% output as rough guess)
+                return UsageStats(
+                    input_tokens=int(total_tokens * 0.8),
+                    output_tokens=int(total_tokens * 0.2),
+                )
+            except ValueError:
+                pass
+
+        # If we can't parse usage, return empty stats
+        # (Agent will still work, just won't have accurate cost tracking)
+        return UsageStats()

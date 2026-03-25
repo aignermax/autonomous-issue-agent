@@ -250,6 +250,65 @@ class MCPBenchmark:
             }, f, indent=2)
         print(f"📊 Results saved to {results_file}")
 
+    def run_mcp_only_benchmark(self):
+        """Run only Phase 2 (WITH MCP), using existing Phase 1 results"""
+        print(f"\n🔬 MCP Benchmark Tool (MCP-only mode)")
+        print(f"Issue: #{self.issue_number}")
+        print(f"Repo: {self.repo_path}\n")
+
+        # Load existing Phase 1 results
+        results_file = self.working_dir / f"benchmark_issue_{self.issue_number}.json"
+        if not results_file.exists():
+            print(f"❌ No existing benchmark results found: {results_file}")
+            print(f"   Run without --mcp-only first to establish Phase 1 baseline")
+            sys.exit(1)
+
+        with open(results_file, 'r') as f:
+            saved_results = json.load(f)
+            self.results["without_mcp"] = saved_results["results"]["without_mcp"]
+
+        print(f"✓ Loaded Phase 1 (WITHOUT MCP) results:")
+        print(f"  Tokens: {self.results['without_mcp']['tokens']:,}")
+        print(f"  Cost: ${self.results['without_mcp']['cost_usd']:.4f}")
+        print(f"  Duration: {int(self.results['without_mcp']['duration_seconds']/60)}m\n")
+
+        try:
+            # Backup MCP config
+            self.backup_mcp_config()
+
+            # Get repo state and find base commit
+            current_commit = self.get_repo_state()
+            print(f"Current repo commit: {current_commit[:8]}")
+
+            base_commit = self.find_issue_base_commit()
+            if not base_commit:
+                print("⚠ Could not find base commit, using HEAD^")
+                base_commit = current_commit + "^"
+
+            # Run WITH MCP only
+            print(f"\n{'='*60}")
+            print(f"Phase 2: Running WITH MCP (using fix)")
+            print(f"{'='*60}")
+            self.enable_mcp()
+            self.reset_repo_to_commit(base_commit)
+            self.results["with_mcp"] = self.run_agent_on_issue(with_mcp=True)
+
+            # Compare results
+            self.compare_results()
+
+        except KeyboardInterrupt:
+            print("\n\n⚠ Benchmark interrupted by user")
+            sys.exit(1)
+        except Exception as e:
+            print(f"\n\n❌ Error during benchmark: {e}")
+            raise
+        finally:
+            # Always restore MCP config and repo state
+            self.enable_mcp()
+            self.restore_mcp_config()
+            self.reset_repo_to_commit(current_commit)
+            print(f"✓ Restored repo to {current_commit[:8]}")
+
     def run_benchmark(self):
         """Run the full benchmark process"""
         print(f"\n🔬 MCP Benchmark Tool")
@@ -346,6 +405,11 @@ def main():
         required=True,
         help="Path to the Connect-A-PIC-Pro repository"
     )
+    parser.add_argument(
+        "--mcp-only",
+        action="store_true",
+        help="Only run Phase 2 (WITH MCP), load Phase 1 results from existing benchmark file"
+    )
 
     args = parser.parse_args()
 
@@ -354,7 +418,11 @@ def main():
         sys.exit(1)
 
     benchmark = MCPBenchmark(args.issue, args.repo)
-    benchmark.run_benchmark()
+
+    if args.mcp_only:
+        benchmark.run_mcp_only_benchmark()
+    else:
+        benchmark.run_benchmark()
 
 
 if __name__ == "__main__":
