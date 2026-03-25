@@ -51,6 +51,9 @@ class AgentStatus:
     max_turns: Optional[int]
     state: str  # "polling", "working", "idle", "error"
     next_poll_in: Optional[timedelta]
+    last_activity: Optional[timedelta]  # Time since last log entry
+    cpu_percent: Optional[float]  # CPU usage percentage
+    session_duration: Optional[timedelta]  # How long current session is running
 
 
 @dataclass
@@ -138,9 +141,24 @@ class DashboardMonitor:
         # Check if agent is running
         info = self.get_process_info("main.py")
         if not info:
-            return AgentStatus(False, None, None, None, None, "stopped", None)
+            return AgentStatus(False, None, None, None, None, "stopped", None, None, None, None)
 
-        pid, _ = info
+        pid, start_time = info
+
+        # Get CPU usage for this process
+        cpu_percent = None
+        try:
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "%cpu"],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                cpu_percent = float(lines[1].strip())
+        except:
+            pass
 
         # Parse last lines of agent.log
         state = "polling"
@@ -148,9 +166,16 @@ class DashboardMonitor:
         next_poll_in = None
         current_turn = None
         max_turns = None
+        last_activity = None
+        session_duration = None
+        session_start_time = None
 
         if self.agent_log.exists():
             try:
+                # Get last modification time of log file
+                log_mtime = datetime.fromtimestamp(self.agent_log.stat().st_mtime)
+                last_activity = datetime.now() - log_mtime
+
                 with open(self.agent_log, 'r') as f:
                     lines = f.readlines()[-50:]  # Last 50 lines
 
@@ -173,9 +198,15 @@ class DashboardMonitor:
                     # Check for working on issue
                     if "Invoking Claude Code" in line:
                         state = "working"
+                        # Extract session start time
+                        import re
+                        timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+                        if timestamp_match:
+                            session_start_time = datetime.strptime(timestamp_match.group(1), "%Y-%m-%d %H:%M:%S")
+                            session_duration = datetime.now() - session_start_time
+
                         for l in reversed(lines):
                             if "Found issue #" in l:
-                                import re
                                 match = re.search(r'issue #(\d+)', l)
                                 if match:
                                     current_issue = int(match.group(1))
@@ -190,7 +221,10 @@ class DashboardMonitor:
             except Exception as e:
                 pass
 
-        return AgentStatus(True, pid, current_issue, current_turn, max_turns, state, next_poll_in)
+        return AgentStatus(
+            True, pid, current_issue, current_turn, max_turns,
+            state, next_poll_in, last_activity, cpu_percent, session_duration
+        )
 
     def get_issue_history(self, limit: int = 5) -> List[IssueHistory]:
         """Get recent issue history from session files"""
@@ -265,6 +299,65 @@ class Dashboard:
         else:
             table.add_row("Current Issue", Text("None", style="dim"))
 
+        # Last Activity (Heartbeat!)
+        if status.last_activity:
+            seconds = int(status.last_activity.total_seconds())
+            if seconds < 60:
+                activity_str = f"{seconds}s ago"
+                activity_color = "green"
+            elif seconds < 300:  # < 5 minutes
+                mins = seconds // 60
+                activity_str = f"{mins}m {seconds % 60}s ago"
+                activity_color = "green"
+            elif seconds < 1800:  # < 30 minutes
+                mins = seconds // 60
+                activity_str = f"{mins}m ago"
+                activity_color = "yellow"
+            elif seconds < 3600:  # < 1 hour
+                mins = seconds // 60
+                activity_str = f"{mins}m ago ⚠️"
+                activity_color = "yellow"
+            else:  # > 1 hour
+                hours = seconds // 3600
+                mins = (seconds % 3600) // 60
+                activity_str = f"{hours}h {mins}m ago ❌"
+                activity_color = "red"
+
+            table.add_row("Last Activity", Text(activity_str, style=activity_color))
+
+        # CPU Usage
+        if status.cpu_percent is not None:
+            if status.cpu_percent > 10:
+                cpu_str = f"{status.cpu_percent:.1f}% (active)"
+                cpu_color = "green"
+            elif status.cpu_percent > 0.5:
+                cpu_str = f"{status.cpu_percent:.1f}% (idle)"
+                cpu_color = "yellow"
+            else:
+                # 0% CPU while working = hung?
+                if status.state == "working":
+                    cpu_str = f"{status.cpu_percent:.1f}% (hung?)"
+                    cpu_color = "red"
+                else:
+                    cpu_str = f"{status.cpu_percent:.1f}%"
+                    cpu_color = "dim"
+
+            table.add_row("CPU Usage", Text(cpu_str, style=cpu_color))
+
+        # Session Duration (for working state)
+        if status.session_duration and status.state == "working":
+            mins = int(status.session_duration.total_seconds() // 60)
+            secs = int(status.session_duration.total_seconds() % 60)
+            if mins < 60:
+                duration_str = f"{mins}m {secs}s"
+            else:
+                hours = mins // 60
+                mins = mins % 60
+                duration_str = f"{hours}h {mins}m"
+
+            table.add_row("Session Time", duration_str)
+
+        # Next Poll (for polling state)
         if status.next_poll_in:
             mins = int(status.next_poll_in.total_seconds() // 60)
             secs = int(status.next_poll_in.total_seconds() % 60)
