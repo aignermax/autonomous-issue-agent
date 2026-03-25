@@ -232,14 +232,28 @@ class InteractiveDashboard(BaseDashboard):
             self.console.print("💡 Use [s] Stream Logs to watch progress!", style="dim")
             self.console.print("💡 Use [k] Kill Agent to stop it.\n", style="dim")
 
-            # Start agent in background
+            # Start agent in background (fully detached)
             python_cmd = "python" if sys.platform == 'win32' else "venv/bin/python3"
-            subprocess.Popen(
-                [python_cmd, "main.py"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=self.monitor.working_dir
-            )
+
+            if sys.platform == 'win32':
+                # Windows: use CREATE_NEW_PROCESS_GROUP
+                subprocess.Popen(
+                    [python_cmd, "main.py"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd=self.monitor.working_dir,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            else:
+                # Unix: use nohup and setsid for full detachment
+                subprocess.Popen(
+                    ["nohup", python_cmd, "main.py"],
+                    stdout=open('/dev/null', 'w'),
+                    stderr=open('/dev/null', 'w'),
+                    cwd=self.monitor.working_dir,
+                    start_new_session=True,
+                    preexec_fn=os.setsid if hasattr(os, 'setsid') else None
+                )
 
             time.sleep(2)
             self.console.print("✅ Agent started in background!", style="green")
