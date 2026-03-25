@@ -322,12 +322,37 @@ Before finishing:
             )
 
             if not committed:
-                state.add_note("No file changes produced")
+                # Check if issue was already solved (e.g., merged in another PR)
+                log.info("No code changes were made. Checking if issue was already solved...")
+
+                # Comment on issue and close it
+                comment = (
+                    f"✅ This issue appears to be already resolved.\n\n"
+                    f"The agent attempted to implement this but found no code changes were necessary, "
+                    f"which typically means the fix was already merged in a previous PR.\n\n"
+                    f"**Agent Stats:**\n"
+                    f"- Sessions: {state.session_count}\n"
+                    f"- Total tokens: {state.total_tokens:,}\n"
+                    f"- Cost: ${state.total_cost_usd:.4f} USD\n\n"
+                    f"Closing as already resolved."
+                )
+
+                try:
+                    issue.create_comment(comment)
+                    issue.edit(state="closed")
+                    log.info(f"Issue #{issue_num} closed - already resolved")
+                except Exception as e:
+                    log.warning(f"Could not close issue: {e}")
+
+                state.add_note("No file changes - issue already resolved, closed automatically")
+                state.completed = True
                 self.session_manager.save_state(state)
+                self.session_manager.delete_state(issue_num)  # Clean up session
+
                 return IssueResult(
-                    success=False,
+                    success=True,  # Changed to True since issue was handled
                     branch=branch,
-                    error="No file changes produced.",
+                    pr_url="",  # No PR needed
                 )
 
             # Create PR with cost information
