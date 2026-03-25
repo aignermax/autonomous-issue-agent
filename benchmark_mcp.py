@@ -131,15 +131,24 @@ class MCPBenchmark:
         # Run the agent with --once flag to process only this issue
         start_time = time.time()
 
-        # TODO: Need to implement --once flag in main.py to process single issue
-        # For now, this is a placeholder
+        # Use venv python to ensure dependencies are available
+        venv_python = self.working_dir / "venv" / "bin" / "python3"
+        if not venv_python.exists():
+            venv_python = "python3"  # Fallback to system python
+
         result = subprocess.run(
-            ["python3", "main.py", "--once", str(self.issue_number)],
+            [str(venv_python), "main.py", "--once", str(self.issue_number)],
             capture_output=True,
             text=True,
             cwd=self.working_dir,
             timeout=3600  # 1 hour timeout
         )
+
+        # Print output for debugging
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print("STDERR:", result.stderr)
 
         duration = time.time() - start_time
 
