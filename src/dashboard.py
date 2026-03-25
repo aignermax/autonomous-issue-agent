@@ -298,10 +298,17 @@ class Dashboard:
 
                 port_str = str(server.port) if server.port else "-"
             else:
-                status = Text("🔴", style="red")
-                pid_str = "-"
-                uptime_str = "-"
-                port_str = str(server.port) if server.port else "-"
+                # Special handling for dotnet-test-mcp (on-demand tool, not a server)
+                if server.name == "dotnet-test-mcp":
+                    status = Text("⚪", style="dim")
+                    pid_str = "on-demand"
+                    uptime_str = "CLI tool"
+                    port_str = "-"
+                else:
+                    status = Text("🔴", style="red")
+                    pid_str = "-"
+                    uptime_str = "-"
+                    port_str = str(server.port) if server.port else "-"
 
             table.add_row(server.name, status, pid_str, uptime_str, port_str)
 
