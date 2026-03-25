@@ -138,18 +138,25 @@ class ClaudeCode:
         Returns:
             Tuple of (output string, reached_max_turns, usage_stats)
         """
+        # Check if MCP is available
+        mcp_config = self.working_dir.parent / ".mcp.json"
+        has_mcp = mcp_config.exists()
+
         cmd = [
             self.claude_cli,
             "-p", prompt,
-            "--dangerously-skip-permissions",
-            "--permission-mode", "bypassPermissions",  # Allow MCP tool usage
             "--output-format", "json",
             "--max-turns", str(self.max_turns),
         ]
 
-        # Add MCP config if .mcp.json exists
-        mcp_config = self.working_dir.parent / ".mcp.json"
-        if mcp_config.exists():
+        # IMPORTANT: --dangerously-skip-permissions is incompatible with MCP!
+        # It causes Claude Code to hang when MCP servers are enabled.
+        # Only use it when MCP is disabled.
+        if not has_mcp:
+            cmd.append("--dangerously-skip-permissions")
+
+        # Add MCP config if available
+        if has_mcp:
             cmd.extend(["--mcp-config", str(mcp_config)])
             log.info(f"Using MCP config: {mcp_config}")
 
