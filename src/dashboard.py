@@ -54,6 +54,7 @@ class AgentStatus:
     last_activity: Optional[timedelta]  # Time since last log entry
     cpu_percent: Optional[float]  # CPU usage percentage
     session_duration: Optional[timedelta]  # How long current session is running
+    duplicate_agents: int = 0  # Number of duplicate agent processes detected
 
 
 @dataclass
@@ -142,16 +143,50 @@ class DashboardMonitor:
 
         return servers
 
+    def get_all_agent_processes(self) -> List[Tuple[int, datetime]]:
+        """Get all running agent processes (detects duplicates)"""
+        agents = []
+        try:
+            result = subprocess.run(
+                ["ps", "-eo", "pid,lstart,cmd"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                env={**os.environ, 'LANG': 'C'}
+            )
+
+            for line in result.stdout.split('\n'):
+                if 'main.py' in line and 'grep' not in line and 'python' in line:
+                    parts = line.strip().split(None, 6)
+                    if len(parts) >= 6:
+                        pid = int(parts[0])
+                        start_str = ' '.join(parts[1:6])
+                        try:
+                            start_time = datetime.strptime(start_str, "%a %b %d %H:%M:%S %Y")
+                            agents.append((pid, start_time))
+                        except:
+                            agents.append((pid, datetime.now()))
+        except:
+            pass
+
+        return agents
+
     def get_agent_status(self) -> AgentStatus:
         """Get current agent status from logs and process"""
-        # Check if agent is running
-        info = self.get_process_info("main.py")
-        if not info:
-            return AgentStatus(False, None, None, None, None, "stopped", None, None, None, None)
+        # Check if agent is running and detect duplicates
+        all_agents = self.get_all_agent_processes()
 
-        pid, start_time = info
+        if not all_agents:
+            return AgentStatus(False, None, None, None, None, "stopped", None, None, None, None, 0)
 
-        # Parse last lines of agent.log FIRST to determine state
+        # Use the most recently started agent
+        all_agents.sort(key=lambda x: x[1], reverse=True)
+        pid, start_time = all_agents[0]
+
+        # Store duplicate count for later warning
+        duplicate_count = len(all_agents) - 1
+
+        # Parse last lines of agent.log to determine state
         state = "polling"
         current_issue = None
         next_poll_in = None
@@ -252,7 +287,8 @@ class DashboardMonitor:
 
         return AgentStatus(
             True, pid, current_issue, current_turn, max_turns,
-            state, next_poll_in, last_activity, cpu_percent, session_duration
+            state, next_poll_in, last_activity, cpu_percent, session_duration,
+            duplicate_count
         )
 
     def get_issue_history(self, limit: int = 5) -> List[IssueHistory]:
@@ -320,6 +356,11 @@ class Dashboard:
 
         table.add_row("Status", status_text)
         table.add_row("PID", str(status.pid))
+
+        # Warning for duplicate agents
+        if status.duplicate_agents > 0:
+            warning_text = Text(f"⚠️ {status.duplicate_agents + 1} agents running!", style="bold red")
+            table.add_row("WARNING", warning_text)
 
         if status.current_issue:
             table.add_row("Current Issue", f"#{status.current_issue}")
