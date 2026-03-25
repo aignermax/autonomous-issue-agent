@@ -9,14 +9,6 @@
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
       }
-    },
-    "openviking": {
-      "command": "openviking-server",
-      "args": [],
-      "env": {
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-        "OPENVIKING_PORT": "1933"
-      }
     }
   }
 }
