@@ -72,7 +72,7 @@ ANTHROPIC_API_KEY=sk-ant-...                      # Anthropic API Key
 AGENT_REPO=owner/your-repo                        # Target repository
 
 # Optional
-AGENT_POLL_INTERVAL=300                           # Polling interval in seconds (default: 300)
+AGENT_POLL_INTERVAL=15                            # Polling interval in seconds (default: 15)
 AGENT_ISSUE_LABEL=agent-task                      # Issue label to watch (default: agent-task)
 AGENT_MAX_TURNS=30                                # Max Claude Code turns (default: 30)
 AGENT_REPO_PATH=./repo                            # Local clone path (default: ./repo)

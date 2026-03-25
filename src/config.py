@@ -14,7 +14,7 @@ class Config:
         self.repo_name: str = os.environ.get("AGENT_REPO", "aignermax/Connect-A-PIC-Pro")
         self.local_path: Path = Path(os.environ.get("AGENT_REPO_PATH", "./repo"))
         self.branch_prefix: str = "agent/"
-        self.poll_interval: int = int(os.environ.get("AGENT_POLL_INTERVAL", "300"))
+        self.poll_interval: int = int(os.environ.get("AGENT_POLL_INTERVAL", "15"))
         self.issue_label: str = os.environ.get("AGENT_ISSUE_LABEL", "agent-task")
         self.max_turns: int = int(os.environ.get("AGENT_MAX_TURNS", "300"))
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
