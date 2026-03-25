@@ -1,6 +1,7 @@
 # Autonomous Issue Agent (AIA)
 
 An autonomous agent that implements GitHub Issues using Claude Code in headless mode.
+<img width="814" height="848" alt="image" src="https://github.com/user-attachments/assets/1bb290ec-c140-449c-8e43-0020d2b1dcf1" />
 
 **Works with any GitHub repository** — not limited to a specific tech stack or project type.
 
