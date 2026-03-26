@@ -233,7 +233,31 @@ python3 ../tools/semantic_search.py "your search query"
 - `python3 ../tools/semantic_search.py "where is bounding box calculation?"`
 - `python3 ../tools/semantic_search.py "test files for parameter sweeping"`
 
-This is MUCH better than grep for finding relevant code! Use it early and often."""
+This is MUCH better than grep for finding relevant code! Use it early and often.
+
+## 🧪 SMART TEST TOOL
+
+**IMPORTANT:** Do NOT use `dotnet test` directly! Use the smart test tool instead:
+
+```bash
+python3 ../tools/smart_test.py [optional-filter]
+```
+
+This filters output to show only summary instead of all 1193 test results!
+
+**Examples:**
+- `python3 ../tools/smart_test.py` - Run all tests, show compact summary
+- `python3 ../tools/smart_test.py ParameterSweeper` - Run only ParameterSweeper tests
+- `python3 ../tools/smart_test.py BoundingBox` - Run only BoundingBox-related tests
+- `python3 ../tools/smart_test.py --file MyFeatureTests.cs` - Run specific test file
+
+The tool shows:
+- ✅/❌ Pass/Fail status
+- Number of tests (passed/failed/skipped)
+- Duration
+- Failed test names (if any)
+
+Much cleaner than raw dotnet output!"""
 
         return prompt
 
