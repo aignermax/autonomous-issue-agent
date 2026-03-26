@@ -234,11 +234,33 @@ def main():
 
     query = ' '.join(sys.argv[1:])
 
-    # Determine repo root
-    repo_root = Path(__file__).parent.parent / "repo"
+    # Determine repo root - support two scenarios:
+    # 1. Tool in autonomous-issue-agent/tools/ → repo is ../repo/
+    # 2. Tool in Connect-A-PIC-Pro/tools/ → repo is ../
+
+    tool_dir = Path(__file__).parent
+    parent_dir = tool_dir.parent
+
+    # First check if parent directory looks like the actual project (has .sln or .csproj)
+    has_solution = list(parent_dir.glob("*.sln"))
+    has_project = (parent_dir / "Connect-A-Pic-Core").exists()
+
+    if has_solution or has_project:
+        # We're directly in the project! (tools/ is inside Connect-A-PIC-Pro/)
+        repo_root = parent_dir
+    # Otherwise check if we're in autonomous-issue-agent setup (has separate repo/ directory)
+    elif (parent_dir / "repo").exists():
+        repo_root = parent_dir / "repo"
+    # Fallback: use current working directory
+    else:
+        repo_root = Path.cwd()
+
     if not repo_root.exists():
         print(f"ERROR: Repository not found at {repo_root}", file=sys.stderr)
+        print(f"       Tool location: {tool_dir}", file=sys.stderr)
         sys.exit(1)
+
+    print(f"📁 Repository: {repo_root}", file=sys.stderr)
 
     # Build or load index
     force_rebuild = '--rebuild' in sys.argv

@@ -17,8 +17,30 @@ import subprocess
 import re
 from pathlib import Path
 
-# Repo root
-REPO_ROOT = Path(__file__).parent.parent / "repo"
+# Determine repo root - support two scenarios:
+# 1. Tool in autonomous-issue-agent/tools/ → repo is ../repo/
+# 2. Tool in Connect-A-PIC-Pro/tools/ → repo is ../
+
+def get_repo_root() -> Path:
+    """Find repository root dynamically."""
+    tool_dir = Path(__file__).parent
+    parent_dir = tool_dir.parent
+
+    # First check if parent directory looks like the actual project (has .sln or .csproj)
+    has_solution = list(parent_dir.glob("*.sln"))
+    has_project = (parent_dir / "Connect-A-Pic-Core").exists()
+
+    if has_solution or has_project:
+        # We're directly in the project! (tools/ is inside Connect-A-PIC-Pro/)
+        return parent_dir
+    # Otherwise check if we're in autonomous-issue-agent setup (has separate repo/ directory)
+    elif (parent_dir / "repo").exists():
+        return parent_dir / "repo"
+    # Fallback: use current working directory
+    else:
+        return Path.cwd()
+
+REPO_ROOT = get_repo_root()
 
 
 def run_dotnet_test(filter_pattern: str = None, verbose: bool = False) -> tuple[bool, str]:
