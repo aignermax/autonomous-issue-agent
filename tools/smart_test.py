@@ -112,16 +112,30 @@ def parse_test_summary(stdout: str) -> dict:
 def extract_failed_tests(stdout: str, stderr: str) -> list[dict]:
     """Extract information about failed tests."""
     failed = []
+    full_output = stdout + "\n" + stderr
 
     # Look for test failure details in output
-    # Format: "X [FAIL] Namespace.ClassName.TestMethod"
-    for line in (stdout + stderr).split('\n'):
-        if '[FAIL]' in line or 'Failed' in line and '::' in line:
-            # Try to extract test name
-            match = re.search(r'\[FAIL\]\s+(.+)', line)
+    # Format variations:
+    # 1. "[xUnit.net ...] TestName [FAIL]"
+    # 2. "  Fehler TestName [123 ms]" (German)
+    # 3. "  Failed TestName [123 ms]" (English)
+
+    for line in full_output.split('\n'):
+        # Pattern 1: [FAIL] marker
+        if '[FAIL]' in line:
+            match = re.search(r'(UnitTests\.[^\s\[]+)', line)
             if match:
                 test_name = match.group(1).strip()
-                failed.append({"name": test_name, "line": line})
+                if not any(f['name'] == test_name for f in failed):  # Avoid duplicates
+                    failed.append({"name": test_name, "line": line.strip()})
+
+        # Pattern 2 & 3: "Fehler" or "Failed" prefix with test name
+        elif line.strip().startswith('Fehler ') or line.strip().startswith('Failed '):
+            match = re.search(r'(Fehler|Failed)\s+(UnitTests\.[^\s\[]+)', line)
+            if match:
+                test_name = match.group(2).strip()
+                if not any(f['name'] == test_name for f in failed):  # Avoid duplicates
+                    failed.append({"name": test_name, "line": line.strip()})
 
     return failed
 
