@@ -94,10 +94,12 @@ class Agent:
 
         Returns:
             - If stacked PRs enabled and recent agent PR found: that PR's head branch
-            - Otherwise: "main"
+            - Otherwise: repository's default branch (e.g., "main", "dev", "master")
         """
+        default = self.github.default_branch
+
         if not self.config.enable_stacked_prs:
-            return "main"
+            return default
 
         # Find the most recent agent PR (sorted by created date, newest first)
         try:
@@ -115,12 +117,12 @@ class Agent:
                     log.info(f"Using stacked PR - base branch: {pr.head.ref}")
                     return pr.head.ref
 
-            log.info("No recent agent PRs found, using main as base")
-            return "main"
+            log.info(f"No recent agent PRs found, using {default} as base")
+            return default
 
         except Exception as e:
             log.warning(f"Failed to fetch recent PRs for stacking: {e}")
-            return "main"
+            return default
 
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
@@ -317,11 +319,12 @@ Much cleaner than raw dotnet output!"""
                     base_branch = self._get_base_branch()
                     log.info(f"Creating new branch: {branch} from {base_branch}")
 
-                    # Checkout base branch first (with fallback to main if it doesn't exist)
+                    # Checkout base branch first (with fallback to default if it doesn't exist)
                     checkout_result = self.git.run("checkout", base_branch)
                     if checkout_result.returncode != 0:
-                        log.warning(f"Base branch {base_branch} doesn't exist, falling back to main")
-                        base_branch = "main"
+                        default_branch = self.github.default_branch
+                        log.warning(f"Base branch {base_branch} doesn't exist, falling back to {default_branch}")
+                        base_branch = default_branch
                         self.git.run("checkout", base_branch)
 
                     # Pull with merge strategy to avoid divergent branches error
@@ -419,14 +422,16 @@ Much cleaner than raw dotnet output!"""
             base_branch = self._get_base_branch()
             previous_pr_number = None
 
-            if self.config.enable_stacked_prs and base_branch != "main":
+            default_branch = self.github.default_branch
+
+            if self.config.enable_stacked_prs and base_branch != default_branch:
                 # Find PR number for the base branch
                 previous_pr = self.github.get_pr_by_branch(base_branch)
                 if previous_pr:
                     previous_pr_number = previous_pr.number
                     log.info(f"Stacking on PR #{previous_pr_number} ({base_branch})")
 
-            # Try to create PR with stacked base, fallback to main if base branch was deleted
+            # Try to create PR with stacked base, fallback to default if base branch was deleted
             try:
                 pr_url = self.github.create_pull_request(
                     branch, issue,
@@ -437,13 +442,13 @@ Much cleaner than raw dotnet output!"""
                 )
             except Exception as e:
                 if "base" in str(e).lower() and "invalid" in str(e).lower():
-                    log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to main")
-                    # Create PR targeting main instead
+                    log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to {default_branch}")
+                    # Create PR targeting default branch instead
                     pr_url = self.github.create_pull_request(
                         branch, issue,
                         body_suffix=pr_body_suffix,
                         summary=output,
-                        base="main",
+                        base=default_branch,
                         previous_pr_number=None
                     )
                 else:

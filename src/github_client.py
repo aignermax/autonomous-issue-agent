@@ -24,6 +24,9 @@ class GitHubClient:
         self.gh = Github(auth=Auth.Token(token))
         self.repo = self.gh.get_repo(repo_name)
         self.repo_name = repo_name
+        # Get default branch from GitHub API (e.g., "main", "dev", "master")
+        self.default_branch = self.repo.default_branch
+        log.info(f"Repository {repo_name} uses default branch: {self.default_branch}")
 
     def find_next_issue(self, label: str):
         """

@@ -71,6 +71,34 @@ def main():
         log.error("Then add your tokens to .env and run ./run_agent.sh")
         sys.exit(1)
 
+    # Check development environment (warn about missing tools)
+    import shutil
+    import platform
+
+    is_wsl = "microsoft" in platform.uname().release.lower()
+
+    if is_wsl:
+        log.info("🐧 Running in WSL (Windows Subsystem for Linux)")
+
+        # Check for dotnet
+        if not shutil.which("dotnet"):
+            log.warning("⚠️  dotnet not found in WSL!")
+            log.warning("    If your repository uses .NET, the agent may struggle with:")
+            log.warning("    - Building projects")
+            log.warning("    - Running tests")
+            log.warning("    - Understanding project structure")
+            log.warning("")
+            log.warning("    To install dotnet in WSL:")
+            log.warning("    wget https://dot.net/v1/dotnet-install.sh")
+            log.warning("    chmod +x dotnet-install.sh")
+            log.warning("    ./dotnet-install.sh --channel 8.0")
+            log.warning("")
+
+    # Check for common dev tools
+    if not shutil.which("git"):
+        log.error("❌ git not found - required for agent operation!")
+        sys.exit(1)
+
     # Initialize agent
     agent = Agent(config)
 
