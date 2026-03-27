@@ -537,7 +537,7 @@ class Dashboard:
         return Panel(table, title="Agent Status", border_style="green" if status.is_running else "red")
 
     def create_config_panel(self) -> Panel:
-        """Create configuration panel showing monitored repositories"""
+        """Create configuration panel showing monitored repositories with branch info"""
         from dotenv import load_dotenv
         load_dotenv(self.monitor.working_dir / ".env")
 
@@ -553,19 +553,50 @@ class Dashboard:
             # Fallback to single repo mode
             repos = [os.environ.get("AGENT_REPO", "Not configured")]
 
-        # Display repository list
+        # Display repository list with branch info
         if len(repos) == 1:
             table.add_row("Repository:", repos[0])
+            # Try to get default branch from GitHub API
+            branch_info = self._get_default_branch(repos[0])
+            if branch_info:
+                table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
         else:
             table.add_row("Repositories:", f"{len(repos)} repos")
             for i, repo in enumerate(repos, 1):
-                table.add_row(f"  [{i}]", repo)
+                branch_info = self._get_default_branch(repo)
+                if branch_info:
+                    table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
+                else:
+                    table.add_row(f"  [{i}]", repo)
 
         # Show label filter
         table.add_row("", "")  # Empty row for spacing
         table.add_row("Label Filter:", "agent-task")
+        table.add_row("Poll Interval:", f"{os.environ.get('AGENT_POLL_INTERVAL', '15')}s")
 
         return Panel(table, title="Configuration", border_style="cyan")
+
+    def _get_default_branch(self, repo_name: str) -> Optional[str]:
+        """Get default branch for a repository from GitHub API (cached)"""
+        try:
+            # Simple cache - only fetch once per dashboard instance
+            if not hasattr(self, '_branch_cache'):
+                self._branch_cache = {}
+
+            if repo_name in self._branch_cache:
+                return self._branch_cache[repo_name]
+
+            # Try to import GitHub client
+            import sys
+            sys.path.insert(0, str(self.monitor.working_dir / "src"))
+            from github_client import GitHubClient
+            gh = GitHubClient(repo_name)
+            branch = gh.default_branch
+            self._branch_cache[repo_name] = branch
+            return branch
+        except Exception:
+            # Silently fail - don't break dashboard if GitHub API fails
+            return None
 
     def create_history_panel(self, history: List[IssueHistory]) -> Panel:
         """Create issue history panel"""

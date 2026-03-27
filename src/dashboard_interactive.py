@@ -73,6 +73,8 @@ class InteractiveDashboard(BaseDashboard):
                 menu.append(" Auto-refresh: ", style="dim")
                 menu.append("ON" if self.auto_refresh else "OFF", style="green" if self.auto_refresh else "red")
                 menu.append("  ", style="dim")
+                menu.append("[c]", style="bold green")
+                menu.append(" Config  ", style="dim")
                 menu.append("[q]", style="bold red")
                 menu.append(" Quit", style="dim")
                 self.console.print(menu)
@@ -130,6 +132,8 @@ class InteractiveDashboard(BaseDashboard):
                     self.handle_logs()
                 elif choice == 's':
                     self.handle_stream_logs()
+                elif choice == 'c':
+                    self.handle_config()
 
         except KeyboardInterrupt:
             self.console.print("\n\nDashboard stopped", style="yellow")
@@ -243,7 +247,144 @@ class InteractiveDashboard(BaseDashboard):
                             time.sleep(0.1)
         except KeyboardInterrupt:
             self.console.print("\n\n[+] Stopped streaming", style="green")
-            time.sleep(1)
+
+    def handle_config(self):
+        """Interactive configuration management"""
+        from dotenv import load_dotenv, set_key
+
+        env_file = self.monitor.working_dir / ".env"
+        load_dotenv(env_file)
+
+        while True:
+            os.system('cls' if sys.platform == 'win32' else 'clear')
+            self.console.print("\n[CONFIG] Repository Configuration\n", style="bold cyan")
+            self.console.print("=" * 80, style="dim")
+
+            # Get current repos
+            repos_str = os.environ.get("AGENT_REPOS", "")
+            if repos_str:
+                repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+            else:
+                repos = [os.environ.get("AGENT_REPO", "")]
+                repos = [r for r in repos if r]
+
+            # Display current configuration with branch info
+            if repos:
+                self.console.print("\nCurrent repositories:", style="bold white")
+                for i, repo in enumerate(repos, 1):
+                    # Try to get branch info
+                    try:
+                        import sys
+                        sys.path.insert(0, str(self.monitor.working_dir / "src"))
+                        from github_client import GitHubClient
+                        gh = GitHubClient(repo)
+                        branch = gh.default_branch
+                        self.console.print(f"  [{i}] {repo} [dim]→ [green]{branch}[/green][/dim]")
+                    except Exception as e:
+                        self.console.print(f"  [{i}] {repo} [dim](unable to fetch branch: {str(e)[:30]}...)[/dim]", style="yellow")
+            else:
+                self.console.print("\n[!] No repositories configured!", style="yellow")
+
+            # Show menu
+            self.console.print("\n" + "=" * 80, style="dim")
+            self.console.print("\nOptions:", style="bold white")
+            self.console.print("  [a] Add repository")
+            self.console.print("  [r] Remove repository")
+            self.console.print("  [e] Edit .env file directly")
+            self.console.print("  [b] Back to dashboard")
+
+            choice = input("\nYour choice: ").strip().lower()
+
+            if choice == 'b':
+                break
+            elif choice == 'a':
+                self._handle_add_repo(env_file)
+            elif choice == 'r':
+                self._handle_remove_repo(env_file, repos)
+            elif choice == 'e':
+                self.console.print(f"\n[>] Opening .env in editor...", style="cyan")
+                editor = os.environ.get('EDITOR', 'nano')
+                subprocess.run([editor, str(env_file)])
+                # Reload after edit
+                load_dotenv(env_file, override=True)
+                os.environ.clear()
+                load_dotenv(env_file)
+
+    def _handle_add_repo(self, env_file: Path):
+        """Add a new repository"""
+        self.console.print("\n[ADD] Add Repository\n", style="bold cyan")
+        self.console.print("Enter repository in format: owner/repo")
+        self.console.print("Example: aignermax/Connect-A-PIC-Pro\n")
+
+        repo = input("Repository: ").strip()
+
+        if not repo or '/' not in repo:
+            self.console.print("\n[!] Invalid format. Use: owner/repo", style="red")
+            time.sleep(2)
+            return
+
+        # Verify repository exists
+        self.console.print(f"\n[>] Verifying repository access...", style="cyan")
+        try:
+            import sys
+            sys.path.insert(0, str(self.monitor.working_dir / "src"))
+            from github_client import GitHubClient
+            gh = GitHubClient(repo)
+            branch = gh.default_branch
+            self.console.print(f"[+] Found repository! Default branch: [green]{branch}[/green]", style="green")
+        except Exception as e:
+            self.console.print(f"\n[!] Error accessing repository: {str(e)}", style="red")
+            self.console.print("    Check repository name and GitHub token permissions", style="dim")
+            time.sleep(3)
+            return
+
+        # Add to .env
+        current_repos = os.environ.get("AGENT_REPOS", os.environ.get("AGENT_REPO", ""))
+        if current_repos:
+            new_repos = f"{current_repos},{repo}"
+        else:
+            new_repos = repo
+
+        set_key(env_file, "AGENT_REPOS", new_repos)
+
+        # Update environment
+        os.environ["AGENT_REPOS"] = new_repos
+
+        self.console.print(f"\n[+] Added {repo} to monitored repositories", style="green")
+        time.sleep(2)
+
+    def _handle_remove_repo(self, env_file: Path, repos: list):
+        """Remove a repository"""
+        if not repos:
+            self.console.print("\n[!] No repositories to remove", style="red")
+            time.sleep(2)
+            return
+
+        self.console.print("\n[REMOVE] Remove Repository\n", style="bold cyan")
+        self.console.print("Enter number of repository to remove (1-{})".format(len(repos)))
+
+        try:
+            choice = int(input("Number: ").strip())
+            if choice < 1 or choice > len(repos):
+                raise ValueError()
+
+            removed_repo = repos[choice - 1]
+            repos.pop(choice - 1)
+
+            # Update .env
+            if repos:
+                set_key(env_file, "AGENT_REPOS", ",".join(repos))
+                os.environ["AGENT_REPOS"] = ",".join(repos)
+            else:
+                set_key(env_file, "AGENT_REPOS", "")
+                os.environ["AGENT_REPOS"] = ""
+
+            self.console.print(f"\n[+] Removed {removed_repo}", style="green")
+            time.sleep(2)
+
+        except (ValueError, EOFError):
+            self.console.print("\n[!] Invalid choice", style="red")
+            time.sleep(2)
 
 
 def main():
