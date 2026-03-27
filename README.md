@@ -80,7 +80,43 @@ GitHub Issues (label: agent-task) across multiple repos
 
 ## Setup
 
-### 1. Prerequisites
+### Quick Setup (Recommended)
+
+**One-command installation** that automatically detects your environment and installs only what you need:
+
+```bash
+# Clone the repository
+git clone https://github.com/aignermax/autonomous-issue-agent.git
+cd autonomous-issue-agent
+
+# Run smart setup script
+./setup.sh
+```
+
+The setup script will:
+- ✅ Detect your environment (WSL, Linux, Mac)
+- ✅ Check what tools are already installed
+- ✅ Analyze your target repositories (.NET, Rust, Node.js, etc.)
+- ✅ Install only missing dependencies
+- ✅ Configure Python virtual environment
+- ✅ Create .env file from template
+
+**For Windows users:** First install WSL, then run the setup script inside WSL:
+```bash
+# In Windows PowerShell (run as Administrator)
+wsl --install Ubuntu
+
+# Open Ubuntu terminal, then:
+cd ~
+git clone https://github.com/aignermax/autonomous-issue-agent.git
+cd autonomous-issue-agent
+./setup.sh
+```
+
+### Manual Setup (Alternative)
+
+<details>
+<summary>Click to expand manual installation steps</summary>
 
 **For Windows Users:**
 This agent requires WSL (Windows Subsystem for Linux) because it uses Unix-specific modules (`pty`, `termios`).
@@ -120,25 +156,14 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
-### 2. Configure Git Credentials (WSL only)
+</details>
 
-**Windows/WSL users only:** Configure Git to access private repositories:
+### Configure Environment Variables
 
-```bash
-# In WSL terminal
-git config --global credential.helper store
-echo 'https://YOUR_GITHUB_TOKEN:@github.com' > ~/.git-credentials
-chmod 600 ~/.git-credentials
-```
-
-Replace `YOUR_GITHUB_TOKEN` with your GitHub Personal Access Token.
-
-### 3. Environment Variables
-
-Copy `.env.example` to `.env` and fill in your credentials:
+The setup script creates `.env` from `.env.example` automatically. Edit it to add your credentials:
 
 ```bash
-cp .env.example .env
+nano .env  # or use your preferred editor
 ```
 
 Then edit `.env`:
