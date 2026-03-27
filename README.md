@@ -82,18 +82,58 @@ GitHub Issues (label: agent-task) across multiple repos
 
 ### 1. Prerequisites
 
+**For Windows Users:**
+This agent requires WSL (Windows Subsystem for Linux) because it uses Unix-specific modules (`pty`, `termios`).
+
+```bash
+# Install WSL with Ubuntu (if not already installed)
+wsl --install Ubuntu
+
+# Open WSL terminal and install Node.js
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Install Claude Code CLI in WSL
+npm install -g @anthropic-ai/claude-code
+
+# Clone the repository in WSL
+cd ~
+git clone https://github.com/aignermax/autonomous-issue-agent.git
+cd autonomous-issue-agent
+
+# Install Python dependencies
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+```
+
+**For Linux/Mac Users:**
+
 ```bash
 # Node.js (>= 18)
 node --version
 
-# Claude Code CLI installieren
+# Claude Code CLI
 npm install -g @anthropic-ai/claude-code
 
 # Python deps
-pip install -r requirements.txt
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 ```
 
-### 2. Environment Variables
+### 2. Configure Git Credentials (WSL only)
+
+**Windows/WSL users only:** Configure Git to access private repositories:
+
+```bash
+# In WSL terminal
+git config --global credential.helper store
+echo 'https://YOUR_GITHUB_TOKEN:@github.com' > ~/.git-credentials
+chmod 600 ~/.git-credentials
+```
+
+Replace `YOUR_GITHUB_TOKEN` with your GitHub Personal Access Token.
+
+### 3. Environment Variables
 
 Copy `.env.example` to `.env` and fill in your credentials:
 
@@ -125,7 +165,7 @@ AGENT_REPO_PATH=./repo                            # Local clone path (default: .
 - **GITHUB_TOKEN**: [Create a Personal Access Token](https://github.com/settings/tokens) with `repo` scope
 - **ANTHROPIC_API_KEY**: Get your API key from [Anthropic Console](https://console.anthropic.com/)
 
-### 3. Add CLAUDE.md to your target repository
+### 4. Add CLAUDE.md to your target repository
 
 The agent reads `CLAUDE.md` from your repository root to understand your project's architecture and coding standards.
 
@@ -140,7 +180,7 @@ The agent reads `CLAUDE.md` from your repository root to understand your project
 - Build commands (`dotnet build`, `npm test`, `cargo build`, etc.)
 - **Vertical Slice requirement** — ensure PRs include UI + backend + tests
 
-### 4. MCP Servers (Not Supported in Python Agent)
+### 5. MCP Servers (Not Supported in Python Agent)
 
 **Note:** MCP (Model Context Protocol) is **not compatible** with the Python headless agent's subprocess approach.
 
@@ -153,54 +193,54 @@ The agent reads `CLAUDE.md` from your repository root to understand your project
 
 **Current Python agent:** Runs reliably without MCP using standard headless mode (~23k tokens per issue). This is still very effective for most tasks.
 
-### 5. Start the agent
+### 6. Start the agent
+
+**For Windows Users:**
+
+Simply double-click `start.bat` in the repository root (Windows). This will:
+- Open the interactive dashboard in WSL
+- Show agent status and monitored repositories
+- Allow you to start/stop the agent with keyboard commands
+
+**For Linux/Mac Users:**
 
 ```bash
-# Run with dashboard (recommended - opens in new terminal window)
-./run_agent.sh
-
-# Run without dashboard
-./run_agent.sh --no-dashboard
-
-# Run once for testing
-./run_agent.sh --once
-
-# Or run directly with Python
-python main.py
-```
-
-### 6. Interactive Dashboard (Recommended)
-
-The interactive dashboard provides full agent control:
-
-```bash
+# Run with dashboard (recommended)
 ./dashboard_interactive.sh
 ```
 
-**Commands:**
+### 7. Interactive Dashboard
+
+The interactive dashboard provides full agent control with a clean interface:
+
+**Windows:** Double-click **[start.bat](start.bat)** in the repository root
+
+**Linux/Mac:** Run `./dashboard_interactive.sh`
+
+**Dashboard Commands:**
 - `[g]` Start Agent - Launch agent in continuous mode
-- `[k]` Kill Agent - Stop running agent
-- `[b]` Benchmark - Test with/without MCP (experimental)
-- `[s]` Stream Logs - Watch real-time agent output
-- `[l]` Show Logs - View recent log entries
+- `[s]` Stop Agent - Stop running agent
 - `[r]` Refresh - Update dashboard display
-- `[a]` Auto-refresh - Toggle automatic updates
 - `[q]` Quit - Exit dashboard
 
-**Dashboard features:**
-- 🟢 Real-time agent status (polling, working, error)
-- 🔄 Current issue being processed
-- 📈 Recent issue history with token usage and costs
-- 📊 Benchmark results and comparisons
+**Dashboard displays:**
+- Real-time agent status (polling, working, idle)
+- Current issue being processed
+- Monitored repositories (e.g., Akhetonics/akhetonics-desktop, Akhetonics/raycore-sdk)
+- Recent issue history with token usage and costs
+- CPU usage and session time
 
 **Alternative (manual start):**
 ```bash
-# Start agent manually
+# Linux/Mac
 source venv/bin/activate
 python3 main.py
+
+# Windows (in WSL)
+wsl bash -c "cd ~/autonomous-issue-agent && venv/bin/python3 main.py"
 ```
 
-### 6. Create issues for the agent
+### 8. Create issues for the agent
 
 Create an issue on GitHub with the label `agent-task` (or your custom label from `.env`):
 
