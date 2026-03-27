@@ -21,5 +21,13 @@ echo   [s] - Stop agent
 echo   [q] - Quit dashboard
 echo.
 
-REM Open WSL and run dashboard directly
-wsl.exe bash -c "cd ~/autonomous-agent-linux && venv/bin/python3 src/dashboard_interactive.py"
+REM Get current directory in Windows format and convert to WSL path
+REM Example: C:\Users\Name\autonomous-issue-agent -> /mnt/c/Users/Name/autonomous-issue-agent
+for %%I in (.) do set CURRENT_DIR=%%~fI
+set WSL_PATH=%CURRENT_DIR:\=/%
+set WSL_PATH=%WSL_PATH:C:=/mnt/c%
+set WSL_PATH=%WSL_PATH:D:=/mnt/d%
+set WSL_PATH=%WSL_PATH:E:=/mnt/e%
+
+REM Open WSL and run dashboard from current directory
+wsl.exe bash -c "cd '%WSL_PATH%' && ./dashboard_interactive.sh"
