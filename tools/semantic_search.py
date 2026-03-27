@@ -255,6 +255,9 @@ def main():
     else:
         repo_root = Path.cwd()
 
+    # Resolve to absolute path (handles ../repo correctly)
+    repo_root = repo_root.resolve()
+
     if not repo_root.exists():
         print(f"ERROR: Repository not found at {repo_root}", file=sys.stderr)
         print(f"       Tool location: {tool_dir}", file=sys.stderr)
