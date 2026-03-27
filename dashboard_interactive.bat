@@ -1,14 +1,14 @@
 @echo off
 REM Interactive Dashboard with keyboard controls
-REM Works on Windows
+REM Runs in WSL to detect WSL agent
 
 cd /d "%~dp0"
 
-REM Activate venv if it exists
-if exist venv\Scripts\activate.bat (
-    call venv\Scripts\activate.bat
-)
+echo Starting Dashboard in WSL...
+echo This allows the dashboard to detect the WSL agent.
+echo.
 
-python src\dashboard_interactive.py
+REM Run dashboard in WSL
+wsl.exe bash -c "cd /mnt/c/Users/MaxAigner/autonomous-issue-agent && wsl-venv/bin/python3 src/dashboard_interactive.py"
 
 pause
