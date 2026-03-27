@@ -148,7 +148,13 @@ class InteractiveDashboard(BaseDashboard):
             self.console.print("TIP: Use [k] Kill Agent to stop it.\n", style="dim")
 
             # Start agent in background (fully detached)
-            python_cmd = "python" if sys.platform == 'win32' else "venv/bin/python3"
+            # Check if wsl-venv exists (WSL), otherwise use venv (Linux native)
+            if os.path.exists("wsl-venv/bin/python3"):
+                python_cmd = "wsl-venv/bin/python3"
+            elif sys.platform == 'win32':
+                python_cmd = "python"
+            else:
+                python_cmd = "venv/bin/python3"
 
             if sys.platform == 'win32':
                 # Windows: use CREATE_NEW_PROCESS_GROUP
