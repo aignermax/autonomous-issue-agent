@@ -11,7 +11,19 @@ class Config:
     """Application configuration loaded from environment variables."""
 
     def __init__(self):
-        self.repo_name: str = os.environ.get("AGENT_REPO", "aignermax/Connect-A-PIC-Pro")
+        # Multi-repository support: AGENT_REPOS (comma-separated) or single AGENT_REPO
+        repos_str = os.environ.get("AGENT_REPOS", "")
+        if repos_str:
+            # Multi-repo mode: "owner/repo1,owner/repo2,owner/repo3"
+            self.repo_names: list[str] = [r.strip() for r in repos_str.split(",") if r.strip()]
+        else:
+            # Single repo mode (backwards compatible)
+            single_repo = os.environ.get("AGENT_REPO", "aignermax/Connect-A-PIC-Pro")
+            self.repo_names: list[str] = [single_repo]
+
+        # Legacy single repo support
+        self.repo_name: str = self.repo_names[0]  # First repo for backwards compatibility
+
         self.local_path: Path = Path(os.environ.get("AGENT_REPO_PATH", "./repo"))
         self.branch_prefix: str = "agent/"
         self.poll_interval: int = int(os.environ.get("AGENT_POLL_INTERVAL", "15"))

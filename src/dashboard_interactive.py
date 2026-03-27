@@ -50,12 +50,14 @@ class InteractiveDashboard(BaseDashboard):
                 # Display panels
                 self.console.print(self.create_agent_panel(agent_status))
                 self.console.print()
+                self.console.print(self.create_config_panel())
+                self.console.print()
                 self.console.print(self.create_history_panel(history))
 
                 # Show menu
                 self.console.print("\n")
                 menu = Text()
-                menu.append("═" * 80 + "\n", style="dim")
+                menu.append("=" * 80 + "\n", style="dim")
                 menu.append("Commands: ", style="bold cyan")
                 menu.append("[r]", style="bold green")
                 menu.append(" Refresh  ", style="dim")
@@ -74,10 +76,10 @@ class InteractiveDashboard(BaseDashboard):
                 menu.append("[q]", style="bold red")
                 menu.append(" Quit", style="dim")
                 self.console.print(menu)
-                self.console.print("═" * 80, style="dim")
+                self.console.print("=" * 80, style="dim")
 
                 if self.auto_refresh:
-                    self.console.print("\n⟳ Auto-refreshing in 5 seconds... (or press Enter for menu)", style="dim")
+                    self.console.print("\n[>] Auto-refreshing in 5 seconds... (or press Enter for menu)", style="dim")
 
                     # Handle input with timeout (platform-specific)
                     choice = ""
@@ -130,20 +132,20 @@ class InteractiveDashboard(BaseDashboard):
                     self.handle_stream_logs()
 
         except KeyboardInterrupt:
-            self.console.print("\n\n👋 Dashboard stopped", style="yellow")
+            self.console.print("\n\nDashboard stopped", style="yellow")
 
     def handle_start_agent(self):
         """Start the autonomous agent"""
-        self.console.print("\n🤖 Starting Autonomous Agent", style="bold yellow")
+        self.console.print("\n[AGENT] Starting Autonomous Agent", style="bold yellow")
         self.console.print("\nThis will start the agent in continuous mode,", style="dim")
         self.console.print("automatically working on open issues.\n", style="dim")
         self.console.print("Confirm? (y/n): ", style="cyan", end="")
 
         confirm = input().strip().lower()
         if confirm == 'y':
-            self.console.print("\n✓ Starting agent...", style="green")
-            self.console.print("💡 Use [s] Stream Logs to watch progress!", style="dim")
-            self.console.print("💡 Use [k] Kill Agent to stop it.\n", style="dim")
+            self.console.print("\n[+] Starting agent...", style="green")
+            self.console.print("TIP: Use [s] Stream Logs to watch progress!", style="dim")
+            self.console.print("TIP: Use [k] Kill Agent to stop it.\n", style="dim")
 
             # Start agent in background (fully detached)
             python_cmd = "python" if sys.platform == 'win32' else "venv/bin/python3"
@@ -169,14 +171,14 @@ class InteractiveDashboard(BaseDashboard):
                 )
 
             time.sleep(2)
-            self.console.print("✅ Agent started in background!", style="green")
+            self.console.print("[OK] Agent started in background!", style="green")
             self.console.print("\nPress Enter to continue...", style="dim")
             input()
 
 
     def handle_kill_agent(self):
         """Kill the agent"""
-        self.console.print("\n⚠️  Kill Agent Process?", style="bold yellow")
+        self.console.print("\n[WARNING] Kill Agent Process?", style="bold yellow")
         self.console.print("This will stop the currently running agent.\n", style="dim")
         self.console.print("Confirm (y/n): ", style="yellow", end="")
 
@@ -187,14 +189,14 @@ class InteractiveDashboard(BaseDashboard):
             else:
                 subprocess.run(["pkill", "-f", "python.*main.py"], stderr=subprocess.DEVNULL)
 
-            self.console.print("\n✓ Agent killed", style="green")
+            self.console.print("\n[+] Agent killed", style="green")
             time.sleep(2)
 
     def handle_logs(self):
         """Show recent logs"""
         os.system('cls' if sys.platform == 'win32' else 'clear')
-        self.console.print("\n📋 Recent Agent Logs (last 30 lines)\n", style="bold cyan")
-        self.console.print("═" * 80 + "\n", style="dim")
+        self.console.print("\n[LOGS] Recent Agent Logs (last 30 lines)\n", style="bold cyan")
+        self.console.print("=" * 80 + "\n", style="dim")
 
         if self.monitor.agent_log.exists():
             with open(self.monitor.agent_log, 'r') as f:
@@ -204,15 +206,15 @@ class InteractiveDashboard(BaseDashboard):
         else:
             self.console.print("No log file found", style="red")
 
-        self.console.print("\n" + "═" * 80, style="dim")
+        self.console.print("\n" + "=" * 80, style="dim")
         self.console.print("\nPress Enter to continue...", style="dim")
         input()
 
     def handle_stream_logs(self):
         """Stream logs in real-time (tail -f)"""
         os.system('cls' if sys.platform == 'win32' else 'clear')
-        self.console.print("\n📡 Streaming Agent Logs (Ctrl+C to stop)\n", style="bold cyan")
-        self.console.print("═" * 80 + "\n", style="dim")
+        self.console.print("\n[STREAM] Agent Logs (Ctrl+C to stop)\n", style="bold cyan")
+        self.console.print("=" * 80 + "\n", style="dim")
 
         if not self.monitor.agent_log.exists():
             self.console.print("No log file found", style="red")
@@ -234,7 +236,7 @@ class InteractiveDashboard(BaseDashboard):
                         else:
                             time.sleep(0.1)
         except KeyboardInterrupt:
-            self.console.print("\n\n✓ Stopped streaming", style="green")
+            self.console.print("\n\n[+] Stopped streaming", style="green")
             time.sleep(1)
 
 

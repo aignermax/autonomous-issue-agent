@@ -15,6 +15,7 @@ Usage:
 
 import time
 import os
+import sys
 import json
 import subprocess
 from pathlib import Path
@@ -146,30 +147,60 @@ class DashboardMonitor:
         return servers
 
     def get_all_agent_processes(self) -> List[Tuple[int, datetime]]:
-        """Get all running agent processes (detects duplicates)"""
+        """Get all running agent processes (detects duplicates) - cross-platform using psutil"""
         agents = []
         try:
-            result = subprocess.run(
-                ["ps", "-eo", "pid,lstart,cmd"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                env={**os.environ, 'LANG': 'C'}
-            )
+            import psutil
 
-            for line in result.stdout.split('\n'):
-                if 'main.py' in line and 'grep' not in line and 'python' in line:
-                    parts = line.strip().split(None, 6)
-                    if len(parts) >= 6:
-                        pid = int(parts[0])
-                        start_str = ' '.join(parts[1:6])
-                        try:
-                            start_time = datetime.strptime(start_str, "%a %b %d %H:%M:%S %Y")
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                try:
+                    proc_info = proc.info
+                    # Check if it's a Python process running main.py
+                    if proc_info['name'] and 'python' in proc_info['name'].lower():
+                        cmdline = proc_info.get('cmdline', [])
+                        if cmdline and any('main.py' in arg for arg in cmdline):
+                            pid = proc_info['pid']
+                            # Convert create_time (timestamp) to datetime
+                            start_time = datetime.fromtimestamp(proc_info['create_time'])
                             agents.append((pid, start_time))
-                        except:
-                            agents.append((pid, datetime.now()))
-        except:
-            pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+        except ImportError:
+            # Fallback to old method if psutil not available
+            try:
+                if sys.platform == 'win32':
+                    # Windows fallback: Try tasklist
+                    result = subprocess.run(
+                        ["tasklist", "/FI", "IMAGENAME eq python.exe", "/V", "/FO", "CSV"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    # This is less reliable, just mark as running if found
+                    if 'python.exe' in result.stdout:
+                        agents.append((0, datetime.now()))  # Dummy entry
+                else:
+                    # Unix/Linux fallback
+                    result = subprocess.run(
+                        ["ps", "-eo", "pid,lstart,cmd"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                        env={**os.environ, 'LANG': 'C'}
+                    )
+                    for line in result.stdout.split('\n'):
+                        if 'main.py' in line and 'grep' not in line and 'python' in line:
+                            parts = line.strip().split(None, 6)
+                            if len(parts) >= 6:
+                                pid = int(parts[0])
+                                start_str = ' '.join(parts[1:6])
+                                try:
+                                    start_time = datetime.strptime(start_str, "%a %b %d %H:%M:%S %Y")
+                                    agents.append((pid, start_time))
+                                except:
+                                    agents.append((pid, datetime.now()))
+            except:
+                pass
 
         return agents
 
@@ -400,14 +431,14 @@ class Dashboard:
     def create_header(self) -> Panel:
         """Create header panel"""
         text = Text()
-        text.append("🤖 Autonomous Issue Agent - Dashboard\n", style="bold cyan")
+        text.append("[AGENT] Autonomous Issue Agent - Dashboard\n", style="bold cyan")
         text.append(f"Working Directory: {self.monitor.working_dir}", style="dim")
         return Panel(text, border_style="cyan")
 
     def create_agent_panel(self, status: AgentStatus) -> Panel:
         """Create agent status panel"""
         if not status.is_running:
-            content = Text("❌ Agent Not Running", style="bold red")
+            content = Text("[X] Agent Not Running", style="bold red")
             return Panel(content, title="Agent Status", border_style="red")
 
         table = Table(show_header=False, box=None, padding=(0, 2))
@@ -416,20 +447,20 @@ class Dashboard:
 
         # Status indicator
         if status.state == "working":
-            status_text = Text("🔧 Working", style="bold yellow")
+            status_text = Text("[>] Working", style="bold yellow")
         elif status.state == "polling":
-            status_text = Text("🟢 Polling", style="bold green")
+            status_text = Text("[+] Polling", style="bold green")
         elif status.state == "error":
-            status_text = Text("❌ Error", style="bold red")
+            status_text = Text("[X] Error", style="bold red")
         else:
-            status_text = Text("⚪ Idle", style="dim")
+            status_text = Text("[ ] Idle", style="dim")
 
         table.add_row("Status", status_text)
         table.add_row("PID", str(status.pid))
 
         # Warning for duplicate agents
         if status.duplicate_agents > 0:
-            warning_text = Text(f"⚠️ {status.duplicate_agents + 1} agents running!", style="bold red")
+            warning_text = Text(f"WARNING: {status.duplicate_agents + 1} agents running!", style="bold red")
             table.add_row("WARNING", warning_text)
 
         if status.current_issue:
@@ -455,12 +486,12 @@ class Dashboard:
                 activity_color = "yellow"
             elif seconds < 3600:  # < 1 hour
                 mins = seconds // 60
-                activity_str = f"{mins}m ago ⚠️"
+                activity_str = f"{mins}m ago [!]"
                 activity_color = "yellow"
             else:  # > 1 hour
                 hours = seconds // 3600
                 mins = (seconds % 3600) // 60
-                activity_str = f"{hours}h {mins}m ago ❌"
+                activity_str = f"{hours}h {mins}m ago [X]"
                 activity_color = "red"
 
             table.add_row("Last Log Entry", Text(activity_str, style=activity_color))
@@ -505,53 +536,36 @@ class Dashboard:
 
         return Panel(table, title="Agent Status", border_style="green" if status.is_running else "red")
 
-    def create_mcp_panel(self, servers: List[MCPServerStatus]) -> Panel:
-        """Create MCP servers status panel"""
-        table = Table(show_header=True, box=None)
-        table.add_column("Server", style="cyan")
-        table.add_column("Status", justify="center")
-        table.add_column("PID", justify="right")
-        table.add_column("Uptime", justify="right")
-        table.add_column("Port", justify="right")
+    def create_config_panel(self) -> Panel:
+        """Create configuration panel showing monitored repositories"""
+        from dotenv import load_dotenv
+        load_dotenv(self.monitor.working_dir / ".env")
 
-        for server in servers:
-            if server.is_running:
-                status = Text("🟢", style="green")
-                pid_str = str(server.pid) if server.pid else "-"
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Setting", style="cyan", width=18)
+        table.add_column("Value", style="white")
 
-                if server.uptime:
-                    hours = int(server.uptime.total_seconds() // 3600)
-                    mins = int((server.uptime.total_seconds() % 3600) // 60)
-                    if hours > 0:
-                        uptime_str = f"{hours}h {mins}m"
-                    else:
-                        uptime_str = f"{mins}m"
-                else:
-                    uptime_str = "-"
+        # Get repositories from environment
+        repos_str = os.environ.get("AGENT_REPOS", "")
+        if repos_str:
+            repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+        else:
+            # Fallback to single repo mode
+            repos = [os.environ.get("AGENT_REPO", "Not configured")]
 
-                # Show port or communication method
-                if server.port:
-                    port_str = str(server.port)
-                elif server.name in ["NetContextServer", "dotnet-test-mcp"]:
-                    port_str = "stdio"
-                else:
-                    port_str = "-"
-            else:
-                # Special handling for dotnet-test-mcp (on-demand tool, not a server)
-                if server.name == "dotnet-test-mcp":
-                    status = Text("⚪", style="dim")
-                    pid_str = "on-demand"
-                    uptime_str = "CLI tool"
-                    port_str = "-"
-                else:
-                    status = Text("🔴", style="red")
-                    pid_str = "-"
-                    uptime_str = "-"
-                    port_str = str(server.port) if server.port else "-"
+        # Display repository list
+        if len(repos) == 1:
+            table.add_row("Repository:", repos[0])
+        else:
+            table.add_row("Repositories:", f"{len(repos)} repos")
+            for i, repo in enumerate(repos, 1):
+                table.add_row(f"  [{i}]", repo)
 
-            table.add_row(server.name, status, pid_str, uptime_str, port_str)
+        # Show label filter
+        table.add_row("", "")  # Empty row for spacing
+        table.add_row("Label Filter:", "agent-task")
 
-        return Panel(table, title="MCP Servers", border_style="cyan")
+        return Panel(table, title="Configuration", border_style="cyan")
 
     def create_history_panel(self, history: List[IssueHistory]) -> Panel:
         """Create issue history panel"""
@@ -562,7 +576,7 @@ class Dashboard:
         table = Table(show_header=True, box=None)
         table.add_column("Issue", style="cyan", width=6)
         table.add_column("PR", style="green", width=6)
-        table.add_column("✓", justify="center", width=3)
+        table.add_column("OK", justify="center", width=3)
         table.add_column("Duration", justify="right", width=9)
         table.add_column("Tokens", justify="right", width=9)
         table.add_column("Cost", justify="right", width=7)
@@ -579,8 +593,8 @@ class Dashboard:
                 if pr_match:
                     pr_str = f"#{pr_match.group(1)}"
 
-            # Status emoji
-            status = "✅" if issue.completed else "⏳"
+            # Status indicator
+            status = "YES" if issue.completed else "..."
 
             # Duration
             duration_str = "-"
@@ -651,13 +665,12 @@ class Dashboard:
 
         # Get current status
         agent_status = self.monitor.get_agent_status()
-        mcp_servers = self.monitor.get_mcp_server_status()
         history = self.monitor.get_issue_history(5)
 
         # Update layout
         layout["header"].update(self.create_header())
         layout["agent"].update(self.create_agent_panel(agent_status))
-        layout["mcp"].update(self.create_mcp_panel(mcp_servers))
+        layout["mcp"].update(self.create_config_panel())
         layout["history"].update(self.create_history_panel(history))
 
         # Footer
@@ -677,7 +690,7 @@ class Dashboard:
                     time.sleep(2)
                     live.update(self.generate_display())
         except KeyboardInterrupt:
-            self.console.print("\n👋 Dashboard stopped", style="yellow")
+            self.console.print("\nDashboard stopped", style="yellow")
 
 
 def main():

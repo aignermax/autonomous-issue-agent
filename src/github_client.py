@@ -76,7 +76,7 @@ class GitHubClient:
         # Add stacking warning if applicable
         if previous_pr_number:
             body_parts.append(
-                f"\n⚠️ **Stacked PR** - This PR is based on #{previous_pr_number}. "
+                f"\n**[WARNING] Stacked PR** - This PR is based on #{previous_pr_number}. "
                 f"Merge that PR first, then this one will automatically update to target `main`.\n"
             )
 

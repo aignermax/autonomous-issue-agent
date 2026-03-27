@@ -37,13 +37,16 @@ The original Python-based implementation using subprocess:
 ## How it works
 
 ```
-GitHub Issue (label: agent-task)
+GitHub Issues (label: agent-task) across multiple repos
         │
         ▼
-   Agent polls every 5 min
+   Agent polls every 15s (configurable)
         │
         ▼
-   Git: clone/pull + create new branch
+   For each repository:
+     - Check for agent-task issues
+     - Clone/pull latest changes
+     - Create feature branch
         │
         ▼
    Claude Code (headless):
@@ -58,7 +61,12 @@ GitHub Issue (label: agent-task)
         │
         ▼
    GitHub: Create PR + close issue
+        │
+        ▼
+   Move to next repository
 ```
+
+**Multi-Repository Support:** The agent can monitor multiple repositories simultaneously. Configure with `AGENT_REPOS=owner/repo1,owner/repo2` in `.env`. The agent processes issues in order across all configured repositories.
 
 ## Why Claude Code over raw API?
 
@@ -99,7 +107,12 @@ Then edit `.env`:
 # Required
 GITHUB_TOKEN=ghp_...                              # GitHub Personal Access Token (repo scope)
 ANTHROPIC_API_KEY=sk-ant-...                      # Anthropic API Key
-AGENT_REPO=owner/your-repo                        # Target repository
+
+# Target Repositories (choose one mode)
+# Multi-repo mode (recommended): Watch multiple repositories
+AGENT_REPOS=owner/repo1,owner/repo2,owner/repo3   # Comma-separated list
+# Single-repo mode: Watch a single repository
+# AGENT_REPO=owner/your-repo                      # Ignored if AGENT_REPOS is set
 
 # Optional
 AGENT_POLL_INTERVAL=15                            # Polling interval in seconds (default: 15)
@@ -127,20 +140,18 @@ The agent reads `CLAUDE.md` from your repository root to understand your project
 - Build commands (`dotnet build`, `npm test`, `cargo build`, etc.)
 - **Vertical Slice requirement** — ensure PRs include UI + backend + tests
 
-### 4. MCP Servers (Currently Not Supported)
+### 4. MCP Servers (Not Supported in Python Agent)
 
-**Note:** MCP (Model Context Protocol) is currently **not compatible** with the agent's subprocess automation approach. MCP works great in interactive Claude Code sessions but hangs when used in automated subprocess calls.
+**Note:** MCP (Model Context Protocol) is **not compatible** with the Python headless agent's subprocess approach.
 
-**Future:** A Claude Code plugin architecture is being explored that would allow direct MCP access without subprocess limitations. See [MCP_TESTING.md](MCP_TESTING.md) for details.
+**Why:** MCP servers require interactive Claude Code sessions and cannot communicate through subprocess automation. They hang when used in headless mode.
 
-**Current status:** Agent runs reliably without MCP using standard headless mode (~23k tokens per issue).
+**Solution:** Use the **[Plugin architecture](plugin/README.md)** instead for full MCP support:
+- ✅ OpenViking: 93% token reduction for code exploration
+- ✅ NetContextServer: .NET-specific tooling
+- ✅ dotnet-test-mcp: Structured test output
 
-**Summary of benefits:**
-- OpenViking: 93% token reduction for code exploration (all languages)
-- NetContextServer: .NET-specific tooling (C# projects only)
-- dotnet-test-mcp: Structured test output (C# projects only)
-
-If you skip this step, the agent will still work but won't use MCP optimizations.
+**Current Python agent:** Runs reliably without MCP using standard headless mode (~23k tokens per issue). This is still very effective for most tasks.
 
 ### 5. Start the agent
 
@@ -256,145 +267,45 @@ Adapt these patterns to your own project's needs.
 
 The agent supports **MCP servers** to enhance Claude Code's capabilities. Currently integrated:
 
-### OpenViking (Semantic Code Search) ⭐ RECOMMENDED FOR ALL PROJECTS
+### OpenViking (Semantic Code Search) ❌ NOT COMPATIBLE WITH HEADLESS MODE
 
-**What it does:** Universal semantic code search with massive token reduction (93% in real-world usage).
+**Status:** OpenViking is **not compatible** with the Python headless agent due to subprocess limitations.
 
-**Benefits:**
-- **93% token reduction** - from 200k tokens to 15k tokens for codebase exploration
-- **Language-agnostic** - works with Python, JavaScript, TypeScript, Rust, Go, C++, and more
-- **Semantic search** - find code by natural language description, not just text matching
-- **Directory overviews** - AI-generated summaries of folder contents
-- **Local embeddings** - uses Ollama (free) or OpenAI for vectorization
+**Why it doesn't work:**
+- OpenViking MCP server requires interactive mode
+- The subprocess-based headless approach cannot communicate with MCP servers
+- Hangs when Claude Code attempts to use MCP tools in subprocess
 
-**Installation:**
+**Alternative:** Use the [Plugin architecture](plugin/README.md) instead, which has full MCP support including OpenViking.
 
-```bash
-# Install OpenViking
-pip install openviking
-
-# Start OpenViking server in background
-openviking-server &
-
-# Index your codebase (for C# projects with unsupported file types)
-cd /path/to/autonomous-issue-agent
-./scripts/index-openviking.sh
-```
-
-**For C# projects (with .axaml/.csproj/.sln files):**
-
-The indexing script uses `--no-strict` flag to allow indexing despite file types that OpenViking doesn't normally support. This allows full C# codebase indexing including Avalonia projects.
-
-**Configuration:**
-
-OpenViking is already configured in `.mcp.json`. Set your OpenAI API key in `.env`:
-
-```bash
-OPENAI_API_KEY=sk-...
-```
-
-Or use Ollama for free local embeddings (see [OpenViking docs](https://github.com/openviking-ai/openviking)).
-
-**What Claude Code gets:**
-- Semantic search across entire codebase
-- File and directory navigation with AI summaries
-- Context-aware code retrieval
-- Massive reduction in token usage for exploration tasks
+**For Plugin users:**
+- ✅ OpenViking works perfectly in the plugin (runs inside Claude Code session)
+- ✅ 93% token reduction for code exploration
+- ✅ Semantic search across entire codebase
 
 ---
 
-### NetContextServer (for .NET/C# projects) - Additional .NET Features
+### NetContextServer (for .NET/C# projects) ❌ NOT COMPATIBLE WITH HEADLESS MODE
 
-**What it does:** Provides semantic code search and .NET-specific analysis for C# codebases.
+**Status:** NetContextServer is **not compatible** with the Python headless agent.
 
-**Benefits:**
-- **Semantic code search** - find code by natural language description
-- **Project analysis** - understands .csproj files and dependencies
-- **Coverage analysis** - multi-format support (Coverlet, LCOV, Cobertura)
-- **Package recommendations** - dependency updates and visualization
-- **C# native** - built specifically for .NET ecosystem
+**Why it doesn't work:**
+- Same subprocess/MCP limitations as OpenViking
+- MCP servers cannot be used in headless subprocess mode
 
-**Installation:**
-
-NetContextServer is included as a git submodule. Build it once:
-
-```bash
-cd mcp-servers/netcontext
-dotnet build
-```
-
-After building, NetContextServer is configured in `.mcp.json` and will start automatically when the agent runs.
-
-**Features available to Claude Code:**
-- List all .NET source files in the project ✅ (works without API key)
-- Analyze .csproj dependencies ✅ (works without API key)
-- Read file contents with context ✅ (works without API key)
-- Search C# code semantically ⚠️ (requires Azure OpenAI - optional)
-
-**Semantic Search (Optional):**
-
-To enable semantic code search, add to your `.env`:
-
-```bash
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_API_KEY=your-azure-openai-key
-```
-
-**Note:** NetContextServer works without Azure OpenAI keys, but semantic search will be disabled.
+**Alternative:** Use the [Plugin architecture](plugin/README.md) for MCP support.
 
 ---
 
-### dotnet-test-mcp (for .NET projects)
+### dotnet-test-mcp (for .NET projects) ❌ NOT COMPATIBLE WITH HEADLESS MODE
 
-Provides structured test execution and output parsing, saving tokens and improving test result analysis.
+**Status:** dotnet-test-mcp is **not compatible** with the Python headless agent.
 
-**Prerequisites:**
-- .NET 10 SDK (only on the agent machine, not in target project!)
-- xUnit v3 with MTP v2 (Microsoft Testing Platform) in target project
+**Why it doesn't work:**
+- MCP servers require interactive Claude Code sessions
+- Not accessible in subprocess-based headless mode
 
-**Installation:**
-
-```bash
-# Install .NET 10 SDK
-wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
-chmod +x /tmp/dotnet-install.sh
-/tmp/dotnet-install.sh --channel 10.0 --install-dir ~/.dotnet-10
-
-# Clone and build dotnet-test-mcp
-git clone https://github.com/j-d-ha/dotnet-test-mcp.git /tmp/dotnet-test-mcp
-~/.dotnet-10/dotnet build /tmp/dotnet-test-mcp/src/DotnetTest.Mcp/DotnetTest.Mcp.csproj -c Release
-~/.dotnet-10/dotnet pack /tmp/dotnet-test-mcp/src/DotnetTest.Mcp/DotnetTest.Mcp.csproj -c Release -o /tmp/dotnet-test-mcp-package
-~/.dotnet-10/dotnet tool install --global DotnetTest.Mcp --version 0.0.1-beta.4 --add-source /tmp/dotnet-test-mcp-package
-```
-
-**Configuration:**
-
-The `.mcp.json` file is already configured in this repository. Claude Code CLI loads it automatically.
-
-**Target project requirements:**
-
-Your .NET project needs MTP v2 enabled in `global.json`:
-
-```json
-{
-  "sdk": {
-    "version": "8.0.100",
-    "rollForward": "latestMajor"
-  },
-  "test": {
-    "runner": "Microsoft.Testing.Platform"
-  }
-}
-```
-
-**What it does:**
-- `ListTestProjects` - Enumerate test projects
-- `ListTestsSummary` - Get test counts and names
-- `RunSingleTest` - Execute specific test
-- `RunAllTests` - Run entire test suite
-- Returns structured JSON instead of thousands of lines of raw output
-
-**Token savings:** ~70-90% reduction in test output tokens!
+**Alternative:** Use the [Plugin architecture](plugin/README.md) for full MCP support including dotnet-test-mcp.
 
 ## Troubleshooting
 

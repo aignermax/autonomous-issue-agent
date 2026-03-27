@@ -41,10 +41,10 @@ class Agent:
     def __init__(self, config: Config):
         """Initialize agent with configuration."""
         self.config = config
-        self.github = GitHubClient(config.repo_name)
-        remote = f"https://github.com/{config.repo_name}.git"
-        self.git = GitRepo(config.local_path, remote)
-        self.claude = ClaudeCode(config.local_path, config.max_turns)
+        # Initialize github client, git repo, etc. per repository (done in run methods)
+        self.github = None
+        self.git = None
+        self.claude = None
         self.session_manager = SessionManager(config.session_dir)
 
     def _extract_branch_from_issue(self, issue) -> Optional[str]:
@@ -252,7 +252,7 @@ This filters output to show only summary instead of all 1193 test results!
 - `python3 ../tools/smart_test.py --file MyFeatureTests.cs` - Run specific test file
 
 The tool shows:
-- ✅/❌ Pass/Fail status
+- [OK]/[FAIL] Pass/Fail status
 - Number of tests (passed/failed/skipped)
 - Duration
 - Failed test names (if any)
@@ -352,7 +352,7 @@ Much cleaner than raw dotnet output!"""
                 # Add GitHub comment with cost
                 self.github.add_issue_comment(
                     issue,
-                    f"🤖 **Session {state.session_count} completed**\n\n"
+                    f"[AGENT] **Session {state.session_count} completed**\n\n"
                     f"- Turns used: {state.total_turns_used}\n"
                     f"- Tokens: {state.total_tokens:,}\n"
                     f"- Cost so far: ${state.total_cost_usd:.4f}\n\n"
@@ -378,7 +378,7 @@ Much cleaner than raw dotnet output!"""
 
                 # Comment on issue and close it
                 comment = (
-                    f"✅ This issue appears to be already resolved.\n\n"
+                    f"[OK] This issue appears to be already resolved.\n\n"
                     f"The agent attempted to implement this but found no code changes were necessary, "
                     f"which typically means the fix was already merged in a previous PR.\n\n"
                     f"**Agent Stats:**\n"
@@ -408,7 +408,7 @@ Much cleaner than raw dotnet output!"""
 
             # Create PR with cost information
             pr_body_suffix = (
-                f"\n## 🤖 Agent Stats\n\n"
+                f"\n## [AGENT] Agent Stats\n\n"
                 f"- **Sessions:** {state.session_count}\n"
                 f"- **Total turns:** {state.total_turns_used}\n"
                 f"- **Total tokens:** {state.total_tokens:,}\n"
@@ -472,35 +472,69 @@ Much cleaner than raw dotnet output!"""
         finally:
             self.git.cleanup()
 
+    def _setup_for_repo(self, repo_name: str) -> None:
+        """
+        Setup GitHub client, Git repo, and Claude Code for a specific repository.
+
+        Args:
+            repo_name: Repository in format "owner/repo"
+        """
+        self.github = GitHubClient(repo_name)
+        remote = f"https://github.com/{repo_name}.git"
+        # Use repo-specific local path to avoid conflicts
+        repo_slug = repo_name.replace("/", "_")
+        local_path = self.config.local_path.parent / f"repo_{repo_slug}"
+        self.git = GitRepo(local_path, remote)
+        self.claude = ClaudeCode(local_path, self.config.max_turns)
+        log.info(f"Setup complete for {repo_name} → {local_path}")
+
     def run_once(self) -> None:
-        """Check for one issue and process it (with auto-continuation)."""
-        issue = self.github.find_next_issue(self.config.issue_label)
-        if not issue:
-            log.info("No open agent-task issues found.")
-            return
+        """Check for one issue across all repositories and process it (with auto-continuation)."""
+        # Iterate through all configured repositories
+        for repo_name in self.config.repo_names:
+            log.info(f"Checking repository: {repo_name}")
+            self._setup_for_repo(repo_name)
 
-        log.info(f"Found issue #{issue.number}: {issue.title}")
-
-        # Process with auto-continuation
-        max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
-        for session in range(max_sessions):
-            result = self.process_issue(issue)
-
-            if result.success:
-                log.info(f"Issue #{issue.number} done → {result.pr_url}")
-                break
-
-            if result.needs_continuation:
-                log.info(f"Session {session + 1} done, continuing...")
-                time.sleep(3)  # Brief pause between sessions
+            issue = self.github.find_next_issue(self.config.issue_label)
+            if not issue:
+                log.info(f"No open {self.config.issue_label} issues found in {repo_name}")
                 continue
 
-            # Failed without continuation
-            log.error(f"Issue #{issue.number} failed: {result.error}")
-            break
+            log.info(f"Found issue #{issue.number} in {repo_name}: {issue.title}")
+
+            # Process with auto-continuation
+            max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
+            for session in range(max_sessions):
+                result = self.process_issue(issue)
+
+                if result.success:
+                    log.info(f"Issue #{issue.number} done → {result.pr_url}")
+                    break
+
+                if result.needs_continuation:
+                    log.info(f"Session {session + 1} done, continuing...")
+                    time.sleep(3)  # Brief pause between sessions
+                    continue
+
+                # Failed without continuation
+                log.error(f"Issue #{issue.number} failed: {result.error}")
+                break
+
+            # Only process one issue per run_once call
+            return
+
+        log.info(f"No {self.config.issue_label} issues found in any repository")
 
     def run_single_issue(self, issue_number: int) -> None:
-        """Process a specific issue by number (for benchmarking)."""
+        """Process a specific issue by number (for benchmarking).
+
+        Note: Uses first repository in config for backwards compatibility.
+        """
+        # Use first repo for single issue mode
+        repo_name = self.config.repo_names[0]
+        log.info(f"Single issue mode - using repository: {repo_name}")
+        self._setup_for_repo(repo_name)
+
         try:
             issue = self.github.repo.get_issue(issue_number)
         except Exception as e:
@@ -534,7 +568,7 @@ Much cleaner than raw dotnet output!"""
     def run_forever(self) -> None:
         """Poll loop — runs until killed."""
         log.info(f"Agent started. Polling every {self.config.poll_interval}s.")
-        log.info(f"Repo: {self.config.repo_name} | Label: {self.config.issue_label}")
+        log.info(f"Repositories: {', '.join(self.config.repo_names)} | Label: {self.config.issue_label}")
 
         while True:
             try:
