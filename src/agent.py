@@ -233,34 +233,38 @@ Before finishing:
 
 ## 🔍 SEMANTIC SEARCH TOOL
 
-You have access to a semantic code search tool that uses AI embeddings to find relevant code:
+You have access to a semantic code search tool that uses AI embeddings to find relevant code.
+
+**IMPORTANT:** The tools are in a separate Python venv. Use the full path to the venv Python:
 
 ```bash
-python3 ../tools/semantic_search.py "your search query"
+/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "your search query"
 ```
 
 **Examples:**
-- `python3 ../tools/semantic_search.py "ViewModel for analysis features"`
-- `python3 ../tools/semantic_search.py "where is bounding box calculation?"`
-- `python3 ../tools/semantic_search.py "test files for parameter sweeping"`
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "ViewModel for analysis features"`
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "where is bounding box calculation?"`
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "test files for parameter sweeping"`
 
 This is MUCH better than grep for finding relevant code! Use it early and often.
 
 ## 🧪 SMART TEST TOOL
 
-**IMPORTANT:** Do NOT use `dotnet test` directly! Use the smart test tool instead:
+**IMPORTANT:** Do NOT use `dotnet test` directly! Use the smart test tool instead.
+
+The tool is in a separate location - use the full path:
 
 ```bash
-python3 ../tools/smart_test.py [optional-filter]
+/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [optional-filter]
 ```
 
 This filters output to show only summary instead of all 1193 test results!
 
 **Examples:**
-- `python3 ../tools/smart_test.py` - Run all tests, show compact summary
-- `python3 ../tools/smart_test.py ParameterSweeper` - Run only ParameterSweeper tests
-- `python3 ../tools/smart_test.py BoundingBox` - Run only BoundingBox-related tests
-- `python3 ../tools/smart_test.py --file MyFeatureTests.cs` - Run specific test file
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py` - Run all tests, show compact summary
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py ParameterSweeper` - Run only ParameterSweeper tests
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py BoundingBox` - Run only BoundingBox-related tests
+- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py --file MyFeatureTests.cs` - Run specific test file
 
 The tool shows:
 - [OK]/[FAIL] Pass/Fail status
