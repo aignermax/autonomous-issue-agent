@@ -23,7 +23,7 @@ class TestConfig:
 
         assert config.github_token == "test-token"
         assert config.anthropic_api_key == "test-key"
-        assert config.poll_interval == 300
+        assert config.poll_interval == 15  # Default is 15 seconds
         assert config.max_turns == 300
         assert config.issue_label == "agent-task"
 
