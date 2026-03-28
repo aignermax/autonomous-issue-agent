@@ -316,9 +316,9 @@ To run the agent on another machine (e.g., work computer):
 
 The `repo/` directory will be automatically cloned on first run.
 
-## Example: Connect-A-PIC-Pro
+## Example: Lunima (formerly Connect-A-PIC-Pro)
 
-This agent was originally developed for [Connect-A-PIC-Pro](https://github.com/aignermax/Connect-A-PIC-Pro), a photonic circuit design tool built with C# / Avalonia.
+This agent was originally developed for [Lunima](https://github.com/aignermax/Connect-A-PIC-Pro) (formerly Connect-A-PIC-Pro), a photonic circuit design tool built with C# / Avalonia.
 
 The included `CLAUDE.md` demonstrates:
 - **Vertical Slice Architecture** (Core + ViewModel + View + Tests)
