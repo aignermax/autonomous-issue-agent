@@ -47,6 +47,34 @@ class Agent:
         self.claude = None
         self.session_manager = SessionManager(config.session_dir)
 
+    def _count_tool_usage(self, output: str) -> dict:
+        """
+        Count usage of semantic_search.py and smart_test.py tools in Claude Code output.
+
+        Args:
+            output: Claude Code output text
+
+        Returns:
+            Dictionary with tool names and counts
+        """
+        import re
+
+        tool_counts = {}
+
+        # Count semantic_search.py usage
+        semantic_pattern = r'/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search\.py'
+        semantic_matches = re.findall(semantic_pattern, output)
+        if semantic_matches:
+            tool_counts['semantic_search'] = len(semantic_matches)
+
+        # Count smart_test.py usage
+        smart_test_pattern = r'/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test\.py'
+        smart_test_matches = re.findall(smart_test_pattern, output)
+        if smart_test_matches:
+            tool_counts['smart_test'] = len(smart_test_matches)
+
+        return tool_counts
+
     def _extract_branch_from_issue(self, issue) -> Optional[str]:
         """
         Extract target branch name from issue body.
@@ -437,7 +465,10 @@ Much cleaner than raw dotnet output!"""
                     pr_url="",  # No PR needed
                 )
 
-            # Create PR with cost information
+            # Count tool usage from all sessions
+            tool_usage = self._count_tool_usage(state.last_output if state.last_output else output)
+
+            # Create PR with cost information and tool usage
             pr_body_suffix = (
                 f"\n## [AGENT] Agent Stats\n\n"
                 f"- **Sessions:** {state.session_count}\n"
@@ -445,6 +476,17 @@ Much cleaner than raw dotnet output!"""
                 f"- **Total tokens:** {state.total_tokens:,}\n"
                 f"- **Estimated cost:** ${state.total_cost_usd:.4f} USD\n"
             )
+
+            # Add tool usage if any tools were used
+            if tool_usage:
+                pr_body_suffix += "\n**Custom Tools Used:**\n"
+                for tool, count in tool_usage.items():
+                    if tool == 'semantic_search':
+                        pr_body_suffix += f"- `semantic_search.py`: {count} searches (AI-powered code search)\n"
+                    elif tool == 'smart_test':
+                        pr_body_suffix += f"- `smart_test.py`: {count} test runs (filtered test output)\n"
+            else:
+                pr_body_suffix += "\n**Custom Tools Used:** None\n"
 
             # Determine base branch and previous PR for stacking
             base_branch = self._get_base_branch()
