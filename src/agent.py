@@ -157,7 +157,9 @@ Continue where you left off. Review what's been done, then:
 2. Check test status: `dotnet test`
 3. Continue implementing missing pieces
 4. Fix any failing tests
-5. Complete the implementation (if it's a new feature, include all vertical slice layers)
+5. **IMPORTANT:** Re-read the issue title to determine type:
+   - "Investigate"/"Test"/"Verify" → ONLY write tests, NO UI
+   - "Add feature"/"Implement UI" → Full vertical slice (Core + ViewModel + View)
 
 **Do not give up!** Take as many attempts as needed to get tests passing.
 
@@ -186,7 +188,18 @@ The repository contains `CLAUDE.md` with complete architecture guidelines. **Rea
 - Fixing the specific bug
 - No need for ViewModel/View if not adding user-facing features
 
-**Important:** Read the issue description to determine which category this is.
+**CRITICAL: Determine the issue type BEFORE starting:**
+
+- ✅ **Test/Investigation issue** → Write ONLY tests, NO UI/ViewModel
+  - Keywords: "test", "verify", "investigate", "reproduce", "confirm bug"
+  - Example: "Investigate: PDK coordinate mismatch" → ONLY write tests
+  - Example: "Add test: GDS roundtrip" → ONLY write tests
+
+- ✅ **User-facing feature** → Full vertical slice (Core + ViewModel + View)
+  - Keywords: "add feature", "implement UI", "user can", "new panel"
+  - Example: "Add export dialog" → Full vertical slice required
+
+**If in doubt, it's probably a test-only issue.** The user will explicitly say if they want UI.
 
 ## Code Quality Rules
 
@@ -220,7 +233,8 @@ Before finishing:
    - Example: For UI features, check existing ViewModel patterns
 4. **Implement complete solution:**
    - For NEW FEATURES: Core → ViewModel → View → Tests (full vertical slice)
-   - For TESTS/BUGFIXES: Just write tests or fix the bug (no UI needed)
+   - For TESTS/BUGFIXES/INVESTIGATIONS: Just write tests or fix the bug (NO UI/ViewModel needed)
+   - **"Investigate" issues = write diagnostic tests, NOT UI panels**
 5. **Build and test iteratively:** Fix errors immediately, don't accumulate them
 6. **PERSISTENCE:** Complex issues may take many attempts - keep trying until tests pass!
 
