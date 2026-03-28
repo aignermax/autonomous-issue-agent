@@ -54,8 +54,20 @@ class GitHubClient:
         Returns:
             PR object or None if not found
         """
-        for pr in self.repo.get_pulls(state="open", head=branch):
-            return pr
+        # GitHub API requires owner:branch format
+        # Get owner from repo name (e.g., "aignermax/Connect-A-PIC-Pro" -> "aignermax")
+        owner = self.repo_name.split('/')[0]
+        head_ref = f"{owner}:{branch}"
+
+        try:
+            for pr in self.repo.get_pulls(state="open", head=head_ref):
+                return pr
+        except Exception:
+            # Fallback: search manually through all open PRs
+            for pr in self.repo.get_pulls(state="open"):
+                if pr.head.ref == branch:
+                    return pr
+
         return None
 
     def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "", base: str = "main", previous_pr_number: int = None) -> str:

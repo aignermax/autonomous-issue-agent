@@ -441,7 +441,24 @@ Much cleaner than raw dotnet output!"""
                     previous_pr_number=previous_pr_number
                 )
             except Exception as e:
-                if "base" in str(e).lower() and "invalid" in str(e).lower():
+                error_str = str(e).lower()
+
+                # Handle "PR already exists" error
+                if "pull request already exists" in error_str or ("422" in str(e) and "already exists" in error_str):
+                    log.warning(f"PR already exists for branch {branch}, checking if it's ours...")
+
+                    # Try to find the existing PR
+                    existing_pr = self.github.get_pr_by_branch(branch)
+                    if existing_pr:
+                        pr_url = existing_pr.html_url
+                        log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
+                        log.info("Work is already complete, marking as done")
+                    else:
+                        log.error(f"PR exists but couldn't find it for branch {branch}")
+                        raise
+
+                # Handle invalid base branch
+                elif "base" in error_str and "invalid" in error_str:
                     log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to {default_branch}")
                     # Create PR targeting default branch instead
                     pr_url = self.github.create_pull_request(
