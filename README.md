@@ -420,3 +420,18 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Contributing
 
 Contributions welcome! Feel free to open issues or submit PRs.
+
+## Optional Dependencies
+
+### Nazca Design (for Photonic IC Design)
+
+If your repository uses Nazca Design for photonic integrated circuit design, install it manually:
+
+```bash
+# Download nazca-0.6.1.tar.gz from the official source
+# Then install in the agent's venv:
+source venv/bin/activate
+pip install /path/to/nazca-0.6.1.tar.gz
+```
+
+Nazca provides photonic IC design capabilities and is used by some test suites.
