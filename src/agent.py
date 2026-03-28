@@ -157,7 +157,9 @@ Continue where you left off. Review what's been done, then:
 2. Check test status: `dotnet test`
 3. Continue implementing missing pieces
 4. Fix any failing tests
-5. Complete the vertical slice (Core + ViewModel + View + Tests)
+5. Complete the implementation (if it's a new feature, include all vertical slice layers)
+
+**Do not give up!** Take as many attempts as needed to get tests passing.
 
 Read CLAUDE.md for all project conventions."""
         else:
@@ -169,9 +171,9 @@ Read CLAUDE.md for all project conventions."""
 
 The repository contains `CLAUDE.md` with complete architecture guidelines. **Read it immediately.**
 
-## MANDATORY: Vertical Slice Architecture
+## Architecture Guidelines
 
-**EVERY feature MUST include ALL layers:**
+**For NEW FEATURES:** Follow Vertical Slice Architecture:
 1. Core logic (Connect-A-Pic-Core/)
 2. ViewModel (CAP.Avalonia/ViewModels/) with [ObservableProperty] and [RelayCommand]
 3. View/AXAML (MainWindow.axaml or new view)
@@ -179,7 +181,12 @@ The repository contains `CLAUDE.md` with complete architecture guidelines. **Rea
 5. Unit tests (UnitTests/)
 6. Integration tests (Core + ViewModel)
 
-**Do NOT create backend-only code. The PR must be testable in the UI.**
+**For TESTS-ONLY or BUGFIXES:** UI is NOT required. Focus on:
+- Writing comprehensive tests
+- Fixing the specific bug
+- No need for ViewModel/View if not adding user-facing features
+
+**Important:** Read the issue description to determine which category this is.
 
 ## Code Quality Rules
 
@@ -211,9 +218,11 @@ Before finishing:
 3. **Find similar features:** Search for existing features similar to what you're building
    - Example: For analysis features, check `Analysis/ParameterSweep*` files
    - Example: For UI features, check existing ViewModel patterns
-4. **Implement vertical slice:** Core → ViewModel → View → Tests (see CODEBASE_MAP.md)
+4. **Implement complete solution:**
+   - For NEW FEATURES: Core → ViewModel → View → Tests (full vertical slice)
+   - For TESTS/BUGFIXES: Just write tests or fix the bug (no UI needed)
 5. **Build and test iteratively:** Fix errors immediately, don't accumulate them
-6. **Verify UI:** The feature MUST be testable in the UI (non-negotiable)
+6. **PERSISTENCE:** Complex issues may take many attempts - keep trying until tests pass!
 
 ## EFFICIENCY TIPS
 
