@@ -386,6 +386,7 @@ Much cleaner than raw dotnet output!"""
             committed = self.git.commit_and_push(
                 branch,
                 f"Agent: implement #{issue_num} — {issue.title}",
+                base_branch=self.github.default_branch,
             )
 
             if not committed:

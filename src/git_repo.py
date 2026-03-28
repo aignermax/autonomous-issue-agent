@@ -67,13 +67,14 @@ class GitRepo:
         """
         self.run("checkout", "-b", name)
 
-    def commit_and_push(self, branch: str, message: str) -> bool:
+    def commit_and_push(self, branch: str, message: str, base_branch: str = "main") -> bool:
         """
         Stage all changes, commit, and push to remote.
 
         Args:
             branch: Branch name to push
             message: Commit message
+            base_branch: Base branch to compare against (default: "main")
 
         Returns:
             True if changes were committed/pushed, False if no changes at all
@@ -104,6 +105,15 @@ class GitRepo:
             log.info(f"Found {unpushed_count} unpushed commit(s), pushing to origin...")
             self.run("push", "--set-upstream", "origin", branch)
             return True
+
+        # IMPORTANT: Check if branch has commits that differ from base branch
+        # (handles case where Claude Code already pushed, but we still need to create PR)
+        base_result = self.run("rev-list", "--count", f"{base_branch}..{branch}")
+        if base_result.returncode == 0:
+            commits_ahead = int(base_result.stdout.strip() or "0")
+            if commits_ahead > 0:
+                log.info(f"Branch has {commits_ahead} commit(s) ahead of {base_branch} (already pushed)")
+                return True
 
         if not has_uncommitted:
             log.info("No changes to commit and no unpushed commits.")
