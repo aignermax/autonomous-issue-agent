@@ -3,4 +3,4 @@
 	url = https://github.com/willibrandon/NetContextServer.git
 [submodule "tools"]
 	path = tools
-	url = https://github.com/Akhetonics/python-dev-tools.git
+	url = https://github.com/aignermax/python-dev-tools.git

@@ -36,7 +36,7 @@ The original Python-based implementation using subprocess:
 
 ## 🛠️ AI-Powered Development Tools
 
-Looking for standalone AI development tools? Check out [**python-dev-tools**](https://github.com/Akhetonics/python-dev-tools):
+Looking for standalone AI development tools? Check out [**python-dev-tools**](https://github.com/aignermax/python-dev-tools):
 - **Semantic Search** - Natural language code search using AI embeddings
 - **Smart Test Runner** - Automatically finds and runs only relevant tests
 
@@ -103,7 +103,7 @@ cd autonomous-issue-agent
 ./setup.sh
 ```
 
-**Note:** The `--recurse-submodules` flag automatically clones the [python-dev-tools](https://github.com/Akhetonics/python-dev-tools) submodule which contains semantic search and smart test runner tools.
+**Note:** The `--recurse-submodules` flag automatically clones the [python-dev-tools](https://github.com/aignermax/python-dev-tools) submodule which contains semantic search and smart test runner tools.
 
 If you already cloned without `--recurse-submodules`, initialize the submodules:
 ```bash
