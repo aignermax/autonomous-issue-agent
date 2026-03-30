@@ -124,7 +124,7 @@ class Agent:
             - If stacked PRs enabled and recent agent PR found: that PR's head branch
             - Otherwise: working branch (prefers 'dev' if exists, falls back to default branch)
         """
-        working_branch = self.git.get_working_branch()
+        working_branch = self.git.get_current_branch()
 
         if not self.config.enable_stacked_prs:
             return working_branch
