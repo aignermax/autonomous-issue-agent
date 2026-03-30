@@ -253,9 +253,25 @@ else
     echo -e "${GREEN}✓${NC} Claude Code CLI installed"
 fi
 
+# Initialize git submodules (python-dev-tools)
+echo ""
+echo -e "${BLUE}[5/7] Initializing submodules...${NC}"
+if [ -d ".git" ]; then
+    if [ ! -f "tools/semantic_search.py" ]; then
+        echo -e "${YELLOW}→${NC} Initializing git submodules (python-dev-tools)..."
+        git submodule update --init --recursive
+        echo -e "${GREEN}✓${NC} Submodules initialized"
+    else
+        echo -e "${GREEN}✓${NC} Submodules already initialized"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC} Not a git repository - submodules skipped"
+    echo -e "   ${YELLOW}Note:${NC} Clone with: git clone --recurse-submodules <repo-url>"
+fi
+
 # Setup Python virtual environment
 echo ""
-echo -e "${YELLOW}→${NC} Setting up Python virtual environment..."
+echo -e "${BLUE}[6/7] Setting up Python virtual environment...${NC}"
 if [ ! -d "venv" ]; then
     python3 -m venv venv
     echo -e "${GREEN}✓${NC} Virtual environment created"
@@ -271,7 +287,7 @@ echo -e "${GREEN}✓${NC} Python dependencies installed"
 
 # Configure environment
 echo ""
-echo -e "${BLUE}[6/6] Final configuration...${NC}"
+echo -e "${BLUE}[7/7] Final configuration...${NC}"
 
 # Check if .env exists
 if [ ! -f .env ]; then
