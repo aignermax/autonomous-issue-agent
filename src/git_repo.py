@@ -13,16 +13,18 @@ log = logging.getLogger("agent")
 class GitRepo:
     """Handles all local git operations."""
 
-    def __init__(self, path: Path, remote_url: str):
+    def __init__(self, path: Path, remote_url: str, default_branch: str = "main"):
         """
         Initialize Git repository handler.
 
         Args:
             path: Local path to the repository
             remote_url: Git remote URL (HTTPS or SSH)
+            default_branch: Default branch name (default: "main")
         """
         self.path = path
         self.remote_url = remote_url
+        self.default_branch = default_branch
 
     def run(self, *args: str) -> subprocess.CompletedProcess:
         """
@@ -55,7 +57,7 @@ class GitRepo:
                 text=True,
             )
         else:
-            self.run("checkout", "main")
+            self.run("checkout", self.default_branch)
             self.run("pull", "--ff-only")
 
     def create_branch(self, name: str) -> None:
@@ -122,8 +124,8 @@ class GitRepo:
         return True
 
     def cleanup(self) -> None:
-        """Return to main branch."""
-        self.run("checkout", "main")
+        """Return to default branch."""
+        self.run("checkout", self.default_branch)
 
     def branch_exists(self, branch: str) -> bool:
         """
