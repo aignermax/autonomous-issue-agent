@@ -122,12 +122,12 @@ class Agent:
 
         Returns:
             - If stacked PRs enabled and recent agent PR found: that PR's head branch
-            - Otherwise: repository's default branch (e.g., "main", "dev", "master")
+            - Otherwise: working branch (prefers 'dev' if exists, falls back to default branch)
         """
-        default = self.github.default_branch
+        working_branch = self.git.get_working_branch()
 
         if not self.config.enable_stacked_prs:
-            return default
+            return working_branch
 
         # Find the most recent agent PR (sorted by created date, newest first)
         try:
@@ -145,12 +145,12 @@ class Agent:
                     log.info(f"Using stacked PR - base branch: {pr.head.ref}")
                     return pr.head.ref
 
-            log.info(f"No recent agent PRs found, using {default} as base")
-            return default
+            log.info(f"No recent agent PRs found, using {working_branch} as base")
+            return working_branch
 
         except Exception as e:
             log.warning(f"Failed to fetch recent PRs for stacking: {e}")
-            return default
+            return working_branch
 
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
@@ -572,11 +572,13 @@ Much cleaner than raw dotnet output!"""
             repo_name: Repository in format "owner/repo"
         """
         self.github = GitHubClient(repo_name)
-        remote = f"https://github.com/{repo_name}.git"
+        # Embed GitHub token in remote URL to avoid credential prompts
+        token = self.config.github_token
+        remote = f"https://{token}@github.com/{repo_name}.git"
         # Use repo-specific local path to avoid conflicts
         repo_slug = repo_name.replace("/", "_")
         local_path = self.config.local_path.parent / f"repo_{repo_slug}"
-        self.git = GitRepo(local_path, remote)
+        self.git = GitRepo(local_path, remote, self.github.default_branch)
         self.claude = ClaudeCode(local_path, self.config.max_turns)
         log.info(f"Setup complete for {repo_name} → {local_path}")
 
