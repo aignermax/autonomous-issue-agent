@@ -572,8 +572,11 @@ class Dashboard:
                     table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
         else:
             table.add_row("Repositories:", f"{len(repos)} repos")
+
+            # Display repos one by one (immediate display, no waiting)
             for i, repo in enumerate(repos, 1):
                 if not skip_api_calls:
+                    # Fetch branch info synchronously but display immediately
                     branch_info = self._get_working_branch(repo)
                     if branch_info:
                         table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
