@@ -572,9 +572,8 @@ Much cleaner than raw dotnet output!"""
             repo_name: Repository in format "owner/repo"
         """
         self.github = GitHubClient(repo_name)
-        # Embed GitHub token in remote URL to avoid credential prompts
-        token = self.config.github_token
-        remote = f"https://{token}@github.com/{repo_name}.git"
+        # Use SSH for authentication (SSH key must be configured in WSL)
+        remote = f"git@github.com:{repo_name}.git"
         # Use repo-specific local path to avoid conflicts
         repo_slug = repo_name.replace("/", "_")
         local_path = self.config.local_path.parent / f"repo_{repo_slug}"
