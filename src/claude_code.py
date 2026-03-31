@@ -132,7 +132,7 @@ class ClaudeCode:
 
     def execute(self, prompt: str, resume_file: Optional[Path] = None) -> Tuple[str, bool, UsageStats]:
         """
-        Run a prompt through Claude Code in headless JSON mode.
+        Run a prompt through Claude Code in headless JSON mode with activity monitoring.
 
         Args:
             prompt: The prompt to execute
@@ -156,12 +156,52 @@ class ClaudeCode:
             cmd.extend(["--resume", str(resume_file)])
             log.info(f"Resuming from session file: {resume_file}")
 
-        result = subprocess.run(
+        # Start Claude Code process
+        process = subprocess.Popen(
             cmd,
             cwd=self.working_dir,
-            capture_output=True,
-            text=True,
-            timeout=3600,  # 1 hour safety timeout
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        # Monitor activity with timeout (20 minutes max inactivity)
+        max_inactivity = 1200  # 20 minutes
+        check_interval = 60  # Check every minute
+        last_activity_time = time.time()
+        last_mtime = self._get_repo_last_modified_time()
+
+        log.info(f"Monitoring Claude Code activity (PID: {process.pid})")
+
+        while process.poll() is None:  # While process is running
+            time.sleep(check_interval)
+
+            # Check if repo files were modified (sign of activity)
+            current_mtime = self._get_repo_last_modified_time()
+            if current_mtime > last_mtime:
+                last_activity_time = time.time()
+                last_mtime = current_mtime
+                log.debug(f"Activity detected (file modified)")
+
+            # Check for inactivity timeout
+            inactivity_duration = time.time() - last_activity_time
+            if inactivity_duration > max_inactivity:
+                log.warning(f"Claude Code appears stuck (no activity for {inactivity_duration:.0f}s)")
+                log.warning(f"Killing stuck process (PID: {process.pid})")
+                process.kill()
+                process.wait(timeout=5)
+                raise RuntimeError(
+                    f"Claude Code stuck: no file modifications for {inactivity_duration:.0f}s. "
+                    "Possible causes: waiting for input, infinite loop, or crashed silently."
+                )
+
+        # Process completed, get output
+        stdout, stderr = process.communicate()
+        result = subprocess.CompletedProcess(
+            args=cmd,
+            returncode=process.returncode,
+            stdout=stdout,
+            stderr=stderr
         )
 
         if result.returncode != 0:
@@ -188,6 +228,32 @@ class ClaudeCode:
             f"Estimated cost: ${usage.estimated_cost_usd:.4f}"
         )
         return actual_output, reached_max_turns, usage
+
+    def _get_repo_last_modified_time(self) -> float:
+        """
+        Get the most recent modification time of any file in the repository.
+
+        Returns:
+            Unix timestamp of the most recently modified file
+        """
+        import os
+        max_mtime = 0.0
+        try:
+            for root, dirs, files in os.walk(self.working_dir):
+                # Skip .git directory
+                if '.git' in root:
+                    continue
+                for file in files:
+                    try:
+                        file_path = os.path.join(root, file)
+                        mtime = os.path.getmtime(file_path)
+                        if mtime > max_mtime:
+                            max_mtime = mtime
+                    except (OSError, PermissionError):
+                        continue
+        except Exception as e:
+            log.warning(f"Error checking repo modification times: {e}")
+        return max_mtime
 
     def _parse_json_usage(self, response: dict) -> UsageStats:
         """Parse usage statistics from JSON response."""
