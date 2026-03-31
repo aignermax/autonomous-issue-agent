@@ -3,7 +3,9 @@
 cd "$(dirname "$0")"
 
 # Activate venv if it exists
-if [ -d "venv" ]; then
+if [ -d "wsl-venv" ]; then
+    source wsl-venv/bin/activate
+elif [ -d "venv" ]; then
     source venv/bin/activate
 fi
 

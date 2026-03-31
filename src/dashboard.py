@@ -556,14 +556,14 @@ class Dashboard:
         # Display repository list with branch info
         if len(repos) == 1:
             table.add_row("Repository:", repos[0])
-            # Try to get default branch from GitHub API
-            branch_info = self._get_default_branch(repos[0])
+            # Try to get working branch (dev if exists, otherwise default)
+            branch_info = self._get_working_branch(repos[0])
             if branch_info:
                 table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
         else:
             table.add_row("Repositories:", f"{len(repos)} repos")
             for i, repo in enumerate(repos, 1):
-                branch_info = self._get_default_branch(repo)
+                branch_info = self._get_working_branch(repo)
                 if branch_info:
                     table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
                 else:
@@ -576,8 +576,8 @@ class Dashboard:
 
         return Panel(table, title="Configuration", border_style="cyan")
 
-    def _get_default_branch(self, repo_name: str) -> Optional[str]:
-        """Get default branch for a repository from GitHub API (cached)"""
+    def _get_working_branch(self, repo_name: str) -> Optional[str]:
+        """Get working branch for a repository (dev if exists, otherwise default branch) (cached)"""
         try:
             # Simple cache - only fetch once per dashboard instance
             if not hasattr(self, '_branch_cache'):
@@ -586,7 +586,19 @@ class Dashboard:
             if repo_name in self._branch_cache:
                 return self._branch_cache[repo_name]
 
-            # Try to import GitHub client
+            # Check if dev branch exists on remote
+            import subprocess
+            result = subprocess.run(
+                ["git", "ls-remote", "--heads", f"https://github.com/{repo_name}.git", "dev"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                self._branch_cache[repo_name] = "dev"
+                return "dev"
+
+            # Fall back to default branch from GitHub API
             import sys
             sys.path.insert(0, str(self.monitor.working_dir / "src"))
             from github_client import GitHubClient

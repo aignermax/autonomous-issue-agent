@@ -20,7 +20,11 @@ class GitRepo:
         Args:
             path: Local path to the repository
             remote_url: Git remote URL (HTTPS or SSH)
+<<<<<<< Updated upstream
             default_branch: Default branch name (default: "main")
+=======
+            default_branch: Default branch name (e.g., "dev", "main", "master")
+>>>>>>> Stashed changes
         """
         self.path = path
         self.remote_url = remote_url
@@ -57,7 +61,12 @@ class GitRepo:
                 text=True,
             )
         else:
+<<<<<<< Updated upstream
             self.run("checkout", self.default_branch)
+=======
+            working_branch = self.get_working_branch()
+            self.run("checkout", working_branch)
+>>>>>>> Stashed changes
             self.run("pull", "--ff-only")
 
     def create_branch(self, name: str) -> None:
@@ -69,18 +78,20 @@ class GitRepo:
         """
         self.run("checkout", "-b", name)
 
-    def commit_and_push(self, branch: str, message: str, base_branch: str = "main") -> bool:
+    def commit_and_push(self, branch: str, message: str, base_branch: str = None) -> bool:
         """
         Stage all changes, commit, and push to remote.
 
         Args:
             branch: Branch name to push
             message: Commit message
-            base_branch: Base branch to compare against (default: "main")
+            base_branch: Base branch to compare against (defaults to repository's default branch)
 
         Returns:
             True if changes were committed/pushed, False if no changes at all
         """
+        if base_branch is None:
+            base_branch = self.default_branch
         self.run("add", ".")
 
         # Check if there are changes to commit
@@ -124,8 +135,9 @@ class GitRepo:
         return True
 
     def cleanup(self) -> None:
-        """Return to default branch."""
-        self.run("checkout", self.default_branch)
+        """Return to working branch."""
+        working_branch = self.get_working_branch()
+        self.run("checkout", working_branch)
 
     def branch_exists(self, branch: str) -> bool:
         """
@@ -139,6 +151,33 @@ class GitRepo:
         """
         result = self.run("rev-parse", "--verify", branch)
         return result.returncode == 0
+
+    def remote_branch_exists(self, branch: str) -> bool:
+        """
+        Check if a branch exists on the remote.
+
+        Args:
+            branch: Branch name
+
+        Returns:
+            True if remote branch exists
+        """
+        result = self.run("ls-remote", "--heads", "origin", branch)
+        return result.returncode == 0 and bool(result.stdout.strip())
+
+    def get_working_branch(self) -> str:
+        """
+        Get the preferred working branch for development.
+        Prefers 'dev' if it exists on remote, otherwise uses default branch.
+
+        Returns:
+            Branch name to use for creating PRs and branching from
+        """
+        if self.remote_branch_exists("dev"):
+            log.info("Using 'dev' branch as working branch (exists on remote)")
+            return "dev"
+        log.info(f"Using '{self.default_branch}' as working branch (no 'dev' branch found)")
+        return self.default_branch
 
     def get_current_branch(self) -> Optional[str]:
         """

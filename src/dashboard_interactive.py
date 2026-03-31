@@ -31,6 +31,36 @@ class InteractiveDashboard(BaseDashboard):
         super().__init__(working_dir)
         self.auto_refresh = True
 
+    def _get_working_branch(self, repo_name: str) -> str:
+        """
+        Get the working branch for a repository (dev if exists, otherwise default branch).
+
+        Args:
+            repo_name: Repository in format "owner/repo"
+
+        Returns:
+            Working branch name
+        """
+        try:
+            import subprocess
+            # Check if dev branch exists on remote
+            result = subprocess.run(
+                ["git", "ls-remote", "--heads", f"https://github.com/{repo_name}.git", "dev"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return "dev"
+
+            # Fall back to default branch from GitHub API
+            import sys
+            sys.path.insert(0, str(self.monitor.working_dir / "src"))
+            from github_client import GitHubClient
+            gh = GitHubClient(repo_name)
+            return gh.default_branch
+        except Exception:
+            return "main"  # Ultimate fallback
 
     def run(self):
         """Run interactive dashboard"""
@@ -272,13 +302,9 @@ class InteractiveDashboard(BaseDashboard):
             if repos:
                 self.console.print("\nCurrent repositories:", style="bold white")
                 for i, repo in enumerate(repos, 1):
-                    # Try to get branch info
+                    # Try to get working branch info
                     try:
-                        import sys
-                        sys.path.insert(0, str(self.monitor.working_dir / "src"))
-                        from github_client import GitHubClient
-                        gh = GitHubClient(repo)
-                        branch = gh.default_branch
+                        branch = self._get_working_branch(repo)
                         self.console.print(f"  [{i}] {repo} [dim]→ [green]{branch}[/green][/dim]")
                     except Exception as e:
                         self.console.print(f"  [{i}] {repo} [dim](unable to fetch branch: {str(e)[:30]}...)[/dim]", style="yellow")
