@@ -156,13 +156,18 @@ class ClaudeCode:
             cmd.extend(["--resume", str(resume_file)])
             log.info(f"Resuming from session file: {resume_file}")
 
-        # Start Claude Code process
+        # Start Claude Code process with BROWSER=echo to prevent opening web pages
+        import os
+        env = os.environ.copy()
+        env['BROWSER'] = 'echo'  # Prevent Claude Code from opening browser windows (use echo instead of /bin/true to avoid errors)
+
         process = subprocess.Popen(
             cmd,
             cwd=self.working_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=env
         )
 
         # Monitor activity with timeout (30 minutes max inactivity)
@@ -338,14 +343,19 @@ class ClaudeCode:
         master, slave = pty.openpty()
 
         try:
-            # Start Claude Code in interactive mode
+            # Start Claude Code in interactive mode with BROWSER=echo to prevent opening web pages
+            import os
+            env = os.environ.copy()
+            env['BROWSER'] = 'echo'  # Prevent Claude Code from opening browser windows (use echo instead of /bin/true to avoid errors)
+
             process = subprocess.Popen(
                 cmd,
                 stdin=slave,
                 stdout=slave,
                 stderr=slave,
                 cwd=self.working_dir,
-                close_fds=True
+                close_fds=True,
+                env=env
             )
 
             os.close(slave)  # Close slave end in parent process

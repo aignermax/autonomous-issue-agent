@@ -2,6 +2,7 @@
 Autonomous Issue Agent - Main orchestration with multi-session support.
 """
 
+import os
 import time
 import logging
 import re
@@ -115,6 +116,27 @@ class Agent:
 
         return None
 
+    def _find_pr_for_issue(self, issue_num: int):
+        """
+        Find an open PR that addresses this issue.
+
+        Args:
+            issue_num: Issue number to search for
+
+        Returns:
+            PR object if found, None otherwise
+        """
+        try:
+            for pr in self.github.repo.get_pulls(state="open"):
+                # Check if PR title or body references this issue
+                # Common patterns: "Fix #123", "Fixes #123", "Closes #123", etc.
+                if f"#{issue_num}" in pr.title or f"#{issue_num}" in (pr.body or ""):
+                    log.info(f"Found existing PR #{pr.number} for issue #{issue_num}")
+                    return pr
+        except Exception as e:
+            log.warning(f"Error searching for existing PR: {e}")
+        return None
+
     def _get_base_branch(self) -> str:
         """
         Get the base branch for the next PR.
@@ -126,10 +148,9 @@ class Agent:
             - If stacked PRs enabled and recent agent PR found: that PR's head branch
             - Otherwise: working branch (prefers 'dev' if exists, falls back to default branch)
         """
-        working_branch = self.git.get_current_branch()
-
         if not self.config.enable_stacked_prs:
-            return working_branch
+            # When stacked PRs disabled, always use the main working branch (dev or main)
+            return self.git.get_working_branch()
 
         # Find the most recent agent PR (sorted by created date, newest first)
         try:
@@ -332,12 +353,28 @@ Much cleaner than raw dotnet output!"""
         """
         issue_num = issue.number
 
+        # Check if issue is still open
+        if issue.state != "open":
+            log.warning(f"Issue #{issue_num} is closed (state: {issue.state})")
+            # Clean up any existing session
+            state = self.session_manager.load_state(issue_num)
+            if state:
+                log.info(f"Deleting session for closed issue #{issue_num}")
+                self.session_manager.delete_state(issue_num)
+            return IssueResult(success=False, branch="", error=f"Issue is closed")
+
         # Check for existing session
         state = self.session_manager.load_state(issue_num)
 
         if state:
             log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
             branch = state.branch_name
+            # Also remove label when resuming (in case it was re-added)
+            try:
+                issue.remove_from_labels(self.config.issue_label)
+                log.info(f"Removed agent-task label from resumed issue #{issue_num}")
+            except Exception as e:
+                log.warning(f"Could not remove label from issue #{issue_num}: {e}")
         else:
             # New session - LOCK the issue by removing agent-task label
             # This prevents other agents from picking up the same issue
@@ -345,8 +382,14 @@ Much cleaner than raw dotnet output!"""
                 log.info(f"Claiming issue #{issue_num} by removing agent-task label")
                 issue.remove_from_labels(self.config.issue_label)
                 log.info(f"Issue #{issue_num} locked (label removed)")
+
+                # Add comment indicating which agent is working on this
+                import socket
+                hostname = socket.gethostname()
+                issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
+                log.info(f"Posted claim comment with hostname: {hostname}")
             except Exception as e:
-                log.warning(f"Could not remove label from issue #{issue_num}: {e}")
+                log.warning(f"Could not remove label or post comment on issue #{issue_num}: {e}")
                 log.warning("This might indicate expired GitHub token or permission issue")
                 log.warning("Continuing anyway, but other agents might pick this up too")
 
@@ -357,9 +400,15 @@ Much cleaner than raw dotnet output!"""
                 branch = target_branch
                 log.info(f"Using existing branch from issue: {branch}")
             else:
-                # Create new branch
-                branch = f"{self.config.branch_prefix}issue-{issue_num}-{int(time.time())}"
-                log.info(f"Creating new branch: {branch}")
+                # Check if there's already an open PR for this issue (to avoid duplicates after restart)
+                existing_pr = self._find_pr_for_issue(issue_num)
+                if existing_pr:
+                    branch = existing_pr.head.ref
+                    log.info(f"Found existing PR #{existing_pr.number} for issue #{issue_num}, reusing branch: {branch}")
+                else:
+                    # Create new branch
+                    branch = f"{self.config.branch_prefix}issue-{issue_num}-{int(time.time())}"
+                    log.info(f"Creating new branch: {branch}")
 
             state = self.session_manager.create_state(issue_num, branch)
             log.info(f"Starting new session for issue #{issue_num}")
@@ -371,7 +420,19 @@ Much cleaner than raw dotnet output!"""
             # Handle branch: checkout existing or create new
             if self.git.branch_exists(branch):
                 log.info(f"Checking out existing branch: {branch}")
+                # Clean any uncommitted changes before checkout
+                status_result = self.git.run("status", "--porcelain")
+                if status_result.stdout.strip():
+                    log.warning(f"Repository has uncommitted changes on current branch, cleaning before checkout...")
+                    self.git.run("reset", "--hard", "HEAD")
+                    self.git.run("clean", "-fd")
                 self.git.run("checkout", branch)
+                # Clean the feature branch too if it has uncommitted changes
+                status_result = self.git.run("status", "--porcelain")
+                if status_result.stdout.strip():
+                    log.warning(f"Feature branch {branch} has uncommitted changes, cleaning...")
+                    self.git.run("reset", "--hard", "HEAD")
+                    self.git.run("clean", "-fd")
                 # Pull latest changes if it's a feature branch
                 if not branch.startswith(self.config.branch_prefix):
                     self.git.run("pull", "--no-rebase", "origin", branch)
@@ -501,58 +562,75 @@ Much cleaner than raw dotnet output!"""
             else:
                 pr_body_suffix += "\n**Custom Tools Used:** None\n"
 
-            # Determine base branch and previous PR for stacking
-            base_branch = self._get_base_branch()
-            previous_pr_number = None
+            # Check if Claude Code already created a PR (extract from output)
+            pr_url = None
+            import re
+            pr_url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/\d+', output)
+            if pr_url_match:
+                pr_url = pr_url_match.group(0)
+                log.info(f"Claude Code already created PR: {pr_url}")
 
-            default_branch = self.github.default_branch
+            # Also check if PR already exists for this branch
+            if not pr_url:
+                existing_pr = self.github.get_pr_by_branch(branch)
+                if existing_pr:
+                    pr_url = existing_pr.html_url
+                    log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
 
-            if self.config.enable_stacked_prs and base_branch != default_branch:
-                # Find PR number for the base branch
-                previous_pr = self.github.get_pr_by_branch(base_branch)
-                if previous_pr:
-                    previous_pr_number = previous_pr.number
-                    log.info(f"Stacking on PR #{previous_pr_number} ({base_branch})")
+            # Only create PR if Claude Code didn't already create one
+            if not pr_url:
+                # Determine base branch and previous PR for stacking
+                base_branch = self._get_base_branch()
+                previous_pr_number = None
 
-            # Try to create PR with stacked base, fallback to default if base branch was deleted
-            try:
-                pr_url = self.github.create_pull_request(
-                    branch, issue,
-                    body_suffix=pr_body_suffix,
-                    summary=output,  # Include Claude Code's summary
-                    base=base_branch,
-                    previous_pr_number=previous_pr_number
-                )
-            except Exception as e:
-                error_str = str(e).lower()
+                default_branch = self.github.default_branch
 
-                # Handle "PR already exists" error
-                if "pull request already exists" in error_str or ("422" in str(e) and "already exists" in error_str):
-                    log.warning(f"PR already exists for branch {branch}, checking if it's ours...")
+                if self.config.enable_stacked_prs and base_branch != default_branch:
+                    # Find PR number for the base branch
+                    previous_pr = self.github.get_pr_by_branch(base_branch)
+                    if previous_pr:
+                        previous_pr_number = previous_pr.number
+                        log.info(f"Stacking on PR #{previous_pr_number} ({base_branch})")
 
-                    # Try to find the existing PR
-                    existing_pr = self.github.get_pr_by_branch(branch)
-                    if existing_pr:
-                        pr_url = existing_pr.html_url
-                        log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
-                        log.info("Work is already complete, marking as done")
-                    else:
-                        log.error(f"PR exists but couldn't find it for branch {branch}")
-                        raise
-
-                # Handle invalid base branch
-                elif "base" in error_str and "invalid" in error_str:
-                    log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to {default_branch}")
-                    # Create PR targeting default branch instead
+                # Try to create PR with stacked base, fallback to default if base branch was deleted
+                try:
                     pr_url = self.github.create_pull_request(
                         branch, issue,
                         body_suffix=pr_body_suffix,
-                        summary=output,
-                        base=default_branch,
-                        previous_pr_number=None
+                        summary=output,  # Include Claude Code's summary
+                        base=base_branch,
+                        previous_pr_number=previous_pr_number
                     )
-                else:
-                    raise
+                except Exception as e:
+                    error_str = str(e).lower()
+
+                    # Handle "PR already exists" error
+                    if "pull request already exists" in error_str or ("422" in str(e) and "already exists" in error_str):
+                        log.warning(f"PR already exists for branch {branch}, checking if it's ours...")
+
+                        # Try to find the existing PR
+                        existing_pr = self.github.get_pr_by_branch(branch)
+                        if existing_pr:
+                            pr_url = existing_pr.html_url
+                            log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
+                            log.info("Work is already complete, marking as done")
+                        else:
+                            log.error(f"PR exists but couldn't find it for branch {branch}")
+                            raise
+
+                    # Handle invalid base branch
+                    elif "base" in error_str and "invalid" in error_str:
+                        log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to {default_branch}")
+                        # Create PR targeting default branch instead
+                        pr_url = self.github.create_pull_request(
+                            branch, issue,
+                            body_suffix=pr_body_suffix,
+                            summary=output,
+                            base=default_branch,
+                            previous_pr_number=None
+                        )
+                    else:
+                        raise
 
             self.github.close_issue(issue, pr_url)
 
@@ -573,13 +651,28 @@ Much cleaner than raw dotnet output!"""
             state.add_note(f"Error: {str(e)[:200]}")
             self.session_manager.save_state(state)
 
-            # Re-add agent-task label if processing failed
-            # This allows other agents or retries to pick it up again
-            try:
-                log.info(f"Re-adding agent-task label to issue #{issue_num} after failure")
-                issue.add_to_labels(self.config.issue_label)
-            except Exception as label_error:
-                log.warning(f"Could not re-add label: {label_error}")
+            # Re-add agent-task label if processing failed (but only for first 2 attempts)
+            # After 3 failed attempts, give up to avoid infinite loops
+            if state.session_count < 3:
+                try:
+                    log.info(f"Re-adding agent-task label to issue #{issue_num} after failure (attempt {state.session_count}/3)")
+                    issue.add_to_labels(self.config.issue_label)
+                except Exception as label_error:
+                    log.warning(f"Could not re-add label: {label_error}")
+            else:
+                log.error(f"Issue #{issue_num} failed {state.session_count} times, giving up. NOT re-adding label.")
+                log.error(f"Manual intervention required. Last error: {str(e)[:500]}")
+                # Post comment on issue to notify user
+                try:
+                    import socket
+                    hostname = socket.gethostname()
+                    issue.create_comment(
+                        f"❌ Agent `{hostname}` failed to complete this issue after {state.session_count} attempts.\n\n"
+                        f"Last error: `{str(e)[:300]}`\n\n"
+                        f"Please investigate manually."
+                    )
+                except:
+                    pass
 
             return IssueResult(success=False, branch=branch, error=str(e))
 
@@ -594,8 +687,17 @@ Much cleaner than raw dotnet output!"""
             repo_name: Repository in format "owner/repo"
         """
         self.github = GitHubClient(repo_name)
-        # Use SSH for authentication (SSH key must be configured in WSL)
-        remote = f"git@github.com:{repo_name}.git"
+        # Use HTTPS with token authentication
+        token = os.getenv("GITHUB_TOKEN")
+        if not token:
+            raise ValueError(
+                "GITHUB_TOKEN not found in environment!\n\n"
+                "Please set your GitHub Personal Access Token:\n"
+                "1. Create a token at: https://github.com/settings/tokens\n"
+                "2. Add to .env file: GITHUB_TOKEN=ghp_your_token_here\n"
+                "3. Token needs 'repo' scope for private repos, 'public_repo' for public repos"
+            )
+        remote = f"https://{token}@github.com/{repo_name}.git"
         # Use repo-specific local path to avoid conflicts
         repo_slug = repo_name.replace("/", "_")
         local_path = self.config.local_path.parent / f"repo_{repo_slug}"

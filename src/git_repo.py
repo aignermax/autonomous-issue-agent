@@ -163,6 +163,9 @@ class GitRepo:
 
     def cleanup(self) -> None:
         """Return to working branch."""
+        # Only cleanup if repository exists
+        if not (self.path / ".git").exists():
+            return
         working_branch = self.get_working_branch()
         self.run("checkout", working_branch)
 

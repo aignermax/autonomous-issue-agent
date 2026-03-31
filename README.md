@@ -6,31 +6,20 @@ An autonomous agent that implements GitHub Issues using Claude Code.
 
 **Works with any GitHub repository** — not limited to a specific tech stack or project type.
 
-## 🆕 Two Implementation Options
+## Implementation: Python Agent
 
-### Option 1: Claude Code Plugin (Recommended - MCP Support!)
+**Recommended Implementation:** Standalone Python agent (headless subprocess)
 
-**✅ Recommended for:** New users, MCP integration, token efficiency
+The Python-based autonomous agent runs as a background service:
+- ✅ **Fully automated polling loop** - Monitors multiple repositories 24/7
+- ✅ **Headless operation** - Runs without interactive Claude Code session
+- ✅ **Multi-repository support** - Process issues across different repos
+- ✅ **Session management** - Resumes work across restarts
+- ✅ **Built-in tools** - Semantic search and smart test runner
+- ⚠️ **No MCP support** - MCP causes hangs in subprocess headless mode
+- ℹ️ **Token usage** - ~15-25k tokens per issue
 
-The plugin runs directly inside Claude Code with full MCP integration:
-- ✅ **GitHub MCP** - Native GitHub API access
-- ✅ **OpenViking MCP** - Semantic search (93% token reduction: 23k → 1.6k)
-- ✅ **Better integration** - Skills + Agent definitions instead of Python code
-- ✅ **Token savings** - ~$6.40 per 100 issues
-
-**→ [Get Started with Plugin](plugin/README.md)** | **[Installation Guide](plugin/INSTALL.md)**
-
-### Option 2: Python Agent (Legacy - No MCP)
-
-**✅ Good for:** Existing users, running agent as standalone service
-
-The original Python-based implementation using subprocess:
-- ❌ MCP not supported (hangs in subprocess)
-- ✅ Fully automated polling loop
-- ✅ Works without Claude Code session
-- ℹ️ Higher token usage (~23k per issue)
-
-**→ Continue reading below for Python agent setup**
+> **Note:** An experimental plugin implementation exists in `plugin/` but has stability issues with MCP in headless mode and is not actively maintained. The Python agent is the stable, production-ready implementation.
 
 ---
 
