@@ -165,33 +165,64 @@ class ClaudeCode:
             text=True
         )
 
-        # Monitor activity with timeout (20 minutes max inactivity)
-        max_inactivity = 1200  # 20 minutes
+        # Monitor activity with timeout (30 minutes max inactivity)
+        # We check multiple signals: CPU usage, file changes, and process state
+        max_inactivity = 1800  # 30 minutes (longer to allow for thinking/analysis time)
         check_interval = 60  # Check every minute
         last_activity_time = time.time()
         last_mtime = self._get_repo_last_modified_time()
+        consecutive_idle_checks = 0
 
         log.info(f"Monitoring Claude Code activity (PID: {process.pid})")
 
         while process.poll() is None:  # While process is running
             time.sleep(check_interval)
 
-            # Check if repo files were modified (sign of activity)
+            activity_detected = False
+
+            # Check 1: File modifications (most reliable indicator of actual work)
             current_mtime = self._get_repo_last_modified_time()
             if current_mtime > last_mtime:
                 last_activity_time = time.time()
                 last_mtime = current_mtime
-                log.debug(f"Activity detected (file modified)")
+                consecutive_idle_checks = 0
+                activity_detected = True
+                log.debug(f"Activity detected: files modified")
+
+            # Check 2: CPU usage (indicates thinking/processing)
+            try:
+                import psutil
+                proc = psutil.Process(process.pid)
+                cpu_percent = proc.cpu_percent(interval=1.0)
+
+                # If CPU > 5%, Claude is doing something
+                if cpu_percent > 5.0:
+                    last_activity_time = time.time()
+                    consecutive_idle_checks = 0
+                    activity_detected = True
+                    log.debug(f"Activity detected: CPU {cpu_percent:.1f}%")
+                else:
+                    # Low CPU for extended time might indicate stuck
+                    consecutive_idle_checks += 1
+            except (ImportError, Exception) as e:
+                # psutil not available or process check failed
+                log.debug(f"Could not check CPU (psutil not available or process gone): {e}")
 
             # Check for inactivity timeout
             inactivity_duration = time.time() - last_activity_time
-            if inactivity_duration > max_inactivity:
-                log.warning(f"Claude Code appears stuck (no activity for {inactivity_duration:.0f}s)")
-                log.warning(f"Killing stuck process (PID: {process.pid})")
+
+            # Only kill if BOTH conditions met:
+            # 1. No activity for max_inactivity seconds
+            # 2. Multiple consecutive idle checks (to avoid false positives)
+            if inactivity_duration > max_inactivity and consecutive_idle_checks > 5:
+                log.warning(f"Claude Code appears stuck:")
+                log.warning(f"  - No activity for {inactivity_duration:.0f}s")
+                log.warning(f"  - {consecutive_idle_checks} consecutive idle checks")
+                log.warning(f"  - Killing process (PID: {process.pid})")
                 process.kill()
                 process.wait(timeout=5)
                 raise RuntimeError(
-                    f"Claude Code stuck: no file modifications for {inactivity_duration:.0f}s. "
+                    f"Claude Code stuck: no activity for {inactivity_duration:.0f}s. "
                     "Possible causes: waiting for input, infinite loop, or crashed silently."
                 )
 

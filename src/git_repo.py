@@ -47,7 +47,11 @@ class GitRepo:
         return result
 
     def ensure_cloned(self) -> None:
-        """Clone repository if not exists, otherwise pull latest changes."""
+        """
+        Clone repository if not exists, otherwise pull latest changes.
+
+        Ensures repository is in clean state before pulling to avoid conflicts.
+        """
         if not (self.path / ".git").exists():
             log.info(f"Cloning {self.remote_url} ...")
             subprocess.run(
@@ -57,9 +61,40 @@ class GitRepo:
                 text=True,
             )
         else:
+            # CRITICAL: Clean any uncommitted changes first to avoid conflicts
+            self._ensure_clean_state()
+
             working_branch = self.get_working_branch()
-            self.run("checkout", working_branch)
-            self.run("pull", "--ff-only")
+            checkout_result = self.run("checkout", working_branch)
+            if checkout_result.returncode != 0:
+                log.error(f"Failed to checkout {working_branch}, attempting to clean and retry")
+                self._ensure_clean_state()
+                self.run("checkout", working_branch)
+
+            pull_result = self.run("pull", "--ff-only")
+            if pull_result.returncode != 0:
+                log.error(f"Pull failed, repository may be in inconsistent state")
+                raise RuntimeError(f"Failed to pull {working_branch}: {pull_result.stderr}")
+
+    def _ensure_clean_state(self) -> None:
+        """
+        Ensure repository is in clean state by resetting any uncommitted changes.
+
+        This prevents git operations from failing due to dirty working directory.
+        """
+        # Check if there are any uncommitted changes
+        status_result = self.run("status", "--porcelain")
+        if status_result.stdout.strip():
+            log.warning(f"Repository has uncommitted changes, cleaning...")
+            log.warning(f"Uncommitted files:\n{status_result.stdout[:500]}")
+
+            # Reset all tracked files
+            self.run("reset", "--hard", "HEAD")
+
+            # Remove all untracked files and directories
+            self.run("clean", "-fd")
+
+            log.info("Repository cleaned: all uncommitted changes removed")
 
     def create_branch(self, name: str) -> None:
         """
