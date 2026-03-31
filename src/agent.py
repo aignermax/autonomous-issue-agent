@@ -658,6 +658,96 @@ Much cleaner than raw dotnet output!"""
             log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
+    def restart_issue(self, repo_name: str, issue_number: int, update_base: bool = True, delete_branch: bool = False) -> bool:
+        """
+        Restart work on an issue from scratch.
+
+        This will:
+        1. Delete the session state (so agent starts fresh)
+        2. Optionally update base branch (pull latest main/dev)
+        3. Optionally delete the old feature branch
+
+        Args:
+            repo_name: Repository name (e.g., "aignermax/Lunima")
+            issue_number: GitHub issue number
+            update_base: Whether to pull latest changes on base branch (default: True)
+            delete_branch: Whether to delete the old feature branch (default: False)
+
+        Returns:
+            True if restart successful, False otherwise
+        """
+        try:
+            # Setup for the specific repository
+            self._setup_for_repo(repo_name)
+
+            # Load existing state to get branch name
+            state = self.session_manager.load_state(issue_number)
+            old_branch = state.branch_name if state else None
+
+            # Delete session state
+            self.session_manager.delete_state(issue_number)
+            log.info(f"Deleted session state for issue #{issue_number}")
+
+            # Update base branch if requested
+            if update_base:
+                self.update_base_branch(repo_name)
+
+            # Delete old feature branch if requested and exists
+            if delete_branch and old_branch:
+                if self.git.branch_exists(old_branch):
+                    # Switch to base branch first
+                    base_branch = self._get_base_branch()
+                    self.git.run("checkout", base_branch)
+                    # Delete the old branch
+                    result = self.git.run("branch", "-D", old_branch)
+                    if result.returncode == 0:
+                        log.info(f"Deleted old branch: {old_branch}")
+                    else:
+                        log.warning(f"Failed to delete branch {old_branch}: {result.stderr}")
+
+            log.info(f"✓ Issue #{issue_number} ready to restart from scratch")
+            return True
+
+        except Exception as e:
+            log.error(f"Failed to restart issue #{issue_number}: {e}")
+            return False
+
+    def update_base_branch(self, repo_name: str) -> bool:
+        """
+        Update the base branch (main/dev) with latest changes from remote.
+
+        Args:
+            repo_name: Repository name (e.g., "aignermax/Lunima")
+
+        Returns:
+            True if update successful, False otherwise
+        """
+        try:
+            # Setup for the specific repository
+            self._setup_for_repo(repo_name)
+
+            # Ensure repo is cloned
+            self.git.ensure_cloned()
+
+            # Get working branch (dev or main)
+            working_branch = self.git.get_working_branch()
+
+            # Checkout and pull
+            log.info(f"Updating base branch: {working_branch}")
+            self.git.run("checkout", working_branch)
+            result = self.git.run("pull", "--ff-only", "origin", working_branch)
+
+            if result.returncode == 0:
+                log.info(f"✓ Base branch {working_branch} updated successfully")
+                return True
+            else:
+                log.error(f"Failed to update {working_branch}: {result.stderr}")
+                return False
+
+        except Exception as e:
+            log.error(f"Failed to update base branch: {e}")
+            return False
+
     def run_forever(self) -> None:
         """Poll loop — runs until killed."""
         log.info(f"Agent started. Polling every {self.config.poll_interval}s.")
