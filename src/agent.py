@@ -753,16 +753,36 @@ Much cleaner than raw dotnet output!"""
 
             # Delete old feature branch if requested and exists
             if delete_branch and old_branch:
+                # Switch to base branch first
+                base_branch = self._get_base_branch()
+                self.git.run("checkout", base_branch)
+
+                # Delete local branch
                 if self.git.branch_exists(old_branch):
-                    # Switch to base branch first
-                    base_branch = self._get_base_branch()
-                    self.git.run("checkout", base_branch)
-                    # Delete the old branch
                     result = self.git.run("branch", "-D", old_branch)
                     if result.returncode == 0:
-                        log.info(f"Deleted old branch: {old_branch}")
+                        log.info(f"Deleted local branch: {old_branch}")
                     else:
-                        log.warning(f"Failed to delete branch {old_branch}: {result.stderr}")
+                        log.warning(f"Failed to delete local branch {old_branch}: {result.stderr}")
+
+                # Also try to delete ALL remote branches for this issue
+                # (there might be multiple from previous restarts)
+                log.info(f"Checking for remote branches for issue #{issue_number}")
+                remote_branches_result = self.git.run("ls-remote", "--heads", "origin")
+                if remote_branches_result.returncode == 0:
+                    # Parse remote branches and find all matching issue-{number}-*
+                    for line in remote_branches_result.stdout.splitlines():
+                        if f"issue-{issue_number}-" in line:
+                            # Extract branch name from: "hash\trefs/heads/branch-name"
+                            parts = line.split("refs/heads/")
+                            if len(parts) == 2:
+                                remote_branch = parts[1].strip()
+                                log.info(f"Deleting remote branch: {remote_branch}")
+                                delete_result = self.git.run("push", "origin", "--delete", remote_branch)
+                                if delete_result.returncode == 0:
+                                    log.info(f"✓ Deleted remote branch: {remote_branch}")
+                                else:
+                                    log.warning(f"Failed to delete remote branch {remote_branch}: {delete_result.stderr}")
 
             log.info(f"✓ Issue #{issue_number} ready to restart from scratch")
             return True
