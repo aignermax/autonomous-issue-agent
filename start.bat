@@ -29,5 +29,12 @@ set WSL_PATH=%WSL_PATH:C:=/mnt/c%
 set WSL_PATH=%WSL_PATH:D:=/mnt/d%
 set WSL_PATH=%WSL_PATH:E:=/mnt/e%
 
-REM Open WSL and run dashboard from current directory
-wsl.exe bash -c "cd '%WSL_PATH%' && ./dashboard_interactive.sh"
+REM Check if Windows Terminal is available
+where wt.exe >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    REM Use Windows Terminal (better performance and rendering)
+    start wt.exe -p "Ubuntu" wsl.exe bash -c "cd '%WSL_PATH%' && ./dashboard_interactive.sh"
+) else (
+    REM Fallback to direct WSL (uses cmd.exe)
+    wsl.exe bash -c "cd '%WSL_PATH%' && ./dashboard_interactive.sh"
+)
