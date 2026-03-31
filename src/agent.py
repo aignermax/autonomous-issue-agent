@@ -339,7 +339,18 @@ Much cleaner than raw dotnet output!"""
             log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
             branch = state.branch_name
         else:
-            # New session - check if issue specifies a branch
+            # New session - LOCK the issue by removing agent-task label
+            # This prevents other agents from picking up the same issue
+            try:
+                log.info(f"Claiming issue #{issue_num} by removing agent-task label")
+                issue.remove_from_labels(self.config.issue_label)
+                log.info(f"Issue #{issue_num} locked (label removed)")
+            except Exception as e:
+                log.warning(f"Could not remove label from issue #{issue_num}: {e}")
+                log.warning("This might indicate expired GitHub token or permission issue")
+                log.warning("Continuing anyway, but other agents might pick this up too")
+
+            # Check if issue specifies a branch
             target_branch = self._extract_branch_from_issue(issue)
 
             if target_branch:
@@ -561,6 +572,15 @@ Much cleaner than raw dotnet output!"""
             log.exception(f"Failed processing issue #{issue_num}")
             state.add_note(f"Error: {str(e)[:200]}")
             self.session_manager.save_state(state)
+
+            # Re-add agent-task label if processing failed
+            # This allows other agents or retries to pick it up again
+            try:
+                log.info(f"Re-adding agent-task label to issue #{issue_num} after failure")
+                issue.add_to_labels(self.config.issue_label)
+            except Exception as label_error:
+                log.warning(f"Could not re-add label: {label_error}")
+
             return IssueResult(success=False, branch=branch, error=str(e))
 
         finally:
