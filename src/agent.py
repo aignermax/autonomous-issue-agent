@@ -46,6 +46,8 @@ class Agent:
         self.git = None
         self.claude = None
         self.session_manager = SessionManager(config.session_dir)
+        # Round-robin state: track which repo was checked last
+        self._last_repo_index = -1
 
     def _count_tool_usage(self, output: str) -> dict:
         """
@@ -582,9 +584,21 @@ Much cleaner than raw dotnet output!"""
         log.info(f"Setup complete for {repo_name} → {local_path}")
 
     def run_once(self) -> None:
-        """Check for one issue across all repositories and process it (with auto-continuation)."""
-        # Iterate through all configured repositories
-        for repo_name in self.config.repo_names:
+        """
+        Check for one issue across all repositories and process it (with auto-continuation).
+
+        Uses round-robin strategy to ensure fair distribution of work across repositories:
+        - Starts checking from the repo after the last one that was processed
+        - If no issue found in any repo after full round, logs and returns
+        - After processing an issue, next run_once() starts from next repo
+        """
+        num_repos = len(self.config.repo_names)
+
+        # Round-robin: start from next repo after last processed one
+        for offset in range(num_repos):
+            repo_index = (self._last_repo_index + 1 + offset) % num_repos
+            repo_name = self.config.repo_names[repo_index]
+
             log.info(f"Checking repository: {repo_name}")
             self._setup_for_repo(repo_name)
 
@@ -594,6 +608,9 @@ Much cleaner than raw dotnet output!"""
                 continue
 
             log.info(f"Found issue #{issue.number} in {repo_name}: {issue.title}")
+
+            # Update last repo index before processing (in case processing takes long)
+            self._last_repo_index = repo_index
 
             # Process with auto-continuation
             max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
@@ -614,6 +631,7 @@ Much cleaner than raw dotnet output!"""
                 break
 
             # Only process one issue per run_once call
+            # Next run_once() will start from next repo (round-robin)
             return
 
         log.info(f"No {self.config.issue_label} issues found in any repository")

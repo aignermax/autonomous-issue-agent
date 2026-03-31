@@ -553,21 +553,39 @@ class Dashboard:
             # Fallback to single repo mode
             repos = [os.environ.get("AGENT_REPO", "Not configured")]
 
+        # Check if agent is actively working to skip expensive API calls
+        agent_status = self.monitor.get_agent_status()
+        skip_api_calls = agent_status.is_running
+
         # Display repository list with branch info
         if len(repos) == 1:
             table.add_row("Repository:", repos[0])
             # Try to get working branch (dev if exists, otherwise default)
-            branch_info = self._get_working_branch(repos[0])
-            if branch_info:
-                table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
+            if not skip_api_calls:
+                branch_info = self._get_working_branch(repos[0])
+                if branch_info:
+                    table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
+            else:
+                # Use cached value when agent is working
+                if hasattr(self, '_branch_cache') and repos[0] in self._branch_cache:
+                    branch_info = self._branch_cache[repos[0]]
+                    table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
         else:
             table.add_row("Repositories:", f"{len(repos)} repos")
             for i, repo in enumerate(repos, 1):
-                branch_info = self._get_working_branch(repo)
-                if branch_info:
-                    table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
+                if not skip_api_calls:
+                    branch_info = self._get_working_branch(repo)
+                    if branch_info:
+                        table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
+                    else:
+                        table.add_row(f"  [{i}]", repo)
                 else:
-                    table.add_row(f"  [{i}]", repo)
+                    # Use cached value when agent is working
+                    if hasattr(self, '_branch_cache') and repo in self._branch_cache:
+                        branch_info = self._branch_cache[repo]
+                        table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
+                    else:
+                        table.add_row(f"  [{i}]", repo)
 
         # Show label filter
         table.add_row("", "")  # Empty row for spacing
