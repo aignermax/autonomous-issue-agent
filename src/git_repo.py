@@ -20,11 +20,7 @@ class GitRepo:
         Args:
             path: Local path to the repository
             remote_url: Git remote URL (HTTPS or SSH)
-<<<<<<< Updated upstream
-            default_branch: Default branch name (default: "main")
-=======
             default_branch: Default branch name (e.g., "dev", "main", "master")
->>>>>>> Stashed changes
         """
         self.path = path
         self.remote_url = remote_url
