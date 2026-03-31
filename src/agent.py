@@ -175,6 +175,335 @@ class Agent:
             log.warning(f"Failed to fetch recent PRs for stacking: {e}")
             return working_branch
 
+    def _validate_and_setup_session(self, issue) -> tuple[Optional[SessionState], str]:
+        """
+        Validate issue and setup/resume session.
+
+        Args:
+            issue: GitHub Issue object
+
+        Returns:
+            Tuple of (session_state, branch_name)
+            Raises IssueResult exception if issue should be skipped
+        """
+        issue_num = issue.number
+
+        # Check if issue is still open
+        if issue.state != "open":
+            log.warning(f"Issue #{issue_num} is closed (state: {issue.state})")
+            state = self.session_manager.load_state(issue_num)
+            if state:
+                log.info(f"Deleting session for closed issue #{issue_num}")
+                self.session_manager.delete_state(issue_num)
+            raise IssueResult(success=False, branch="", error=f"Issue is closed")
+
+        # Check for existing session
+        state = self.session_manager.load_state(issue_num)
+
+        if state:
+            # Resume existing session
+            log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
+            branch = state.branch_name
+            try:
+                issue.remove_from_labels(self.config.issue_label)
+                log.info(f"Removed agent-task label from resumed issue #{issue_num}")
+            except Exception as e:
+                log.warning(f"Could not remove label from issue #{issue_num}: {e}")
+        else:
+            # New session - claim the issue
+            branch = self._claim_issue_and_create_branch(issue)
+            state = self.session_manager.create_state(issue_num, branch)
+            log.info(f"Starting new session for issue #{issue_num}")
+
+        return state, branch
+
+    def _claim_issue_and_create_branch(self, issue) -> str:
+        """
+        Claim an issue by removing label and determine branch name.
+
+        Args:
+            issue: GitHub Issue object
+
+        Returns:
+            Branch name to use
+        """
+        issue_num = issue.number
+
+        # LOCK the issue by removing agent-task label
+        try:
+            log.info(f"Claiming issue #{issue_num} by removing agent-task label")
+            issue.remove_from_labels(self.config.issue_label)
+            log.info(f"Issue #{issue_num} locked (label removed)")
+
+            import socket
+            hostname = socket.gethostname()
+            issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
+            log.info(f"Posted claim comment with hostname: {hostname}")
+        except Exception as e:
+            log.warning(f"Could not remove label or post comment on issue #{issue_num}: {e}")
+            log.warning("This might indicate expired GitHub token or permission issue")
+            log.warning("Continuing anyway, but other agents might pick this up too")
+
+        # Determine branch name
+        target_branch = self._extract_branch_from_issue(issue)
+        if target_branch:
+            log.info(f"Using existing branch from issue: {target_branch}")
+            return target_branch
+
+        # Check for existing PR
+        existing_pr = self._find_pr_for_issue(issue_num)
+        if existing_pr:
+            branch = existing_pr.head.ref
+            log.info(f"Found existing PR #{existing_pr.number} for issue #{issue_num}, reusing branch: {branch}")
+            return branch
+
+        # Create new branch name
+        branch = f"{self.config.branch_prefix}issue-{issue_num}-{int(time.time())}"
+        log.info(f"Creating new branch: {branch}")
+        return branch
+
+    def _prepare_branch(self, branch: str) -> None:
+        """
+        Ensure repository is ready and branch is checked out.
+
+        Args:
+            branch: Branch name to prepare
+        """
+        self.git.ensure_cloned()
+
+        if self.git.branch_exists(branch):
+            self._checkout_existing_branch(branch)
+        else:
+            self._create_new_branch(branch)
+
+    def _checkout_existing_branch(self, branch: str) -> None:
+        """Checkout existing branch and clean uncommitted changes."""
+        log.info(f"Checking out existing branch: {branch}")
+
+        # Clean any uncommitted changes before checkout
+        status_result = self.git.run("status", "--porcelain")
+        if status_result.stdout.strip():
+            log.warning("Repository has uncommitted changes, cleaning before checkout...")
+            self.git.run("reset", "--hard", "HEAD")
+            self.git.run("clean", "-fd")
+
+        self.git.run("checkout", branch)
+
+        # Clean the feature branch too if needed
+        status_result = self.git.run("status", "--porcelain")
+        if status_result.stdout.strip():
+            log.warning(f"Feature branch {branch} has uncommitted changes, cleaning...")
+            self.git.run("reset", "--hard", "HEAD")
+            self.git.run("clean", "-fd")
+
+        # Pull latest changes if it's not an agent branch
+        if not branch.startswith(self.config.branch_prefix):
+            self.git.run("pull", "--no-rebase", "origin", branch)
+
+    def _create_new_branch(self, branch: str) -> None:
+        """Create new branch from base or fetch from remote."""
+        # Check if branch exists on remote
+        remote_exists = self.git.run("ls-remote", "--heads", "origin", branch)
+        if remote_exists.returncode == 0 and branch in remote_exists.stdout:
+            log.info(f"Fetching and checking out remote branch: {branch}")
+            self.git.run("fetch", "origin", branch)
+            self.git.run("checkout", "-b", branch, f"origin/{branch}")
+            return
+
+        # Create new branch from base
+        base_branch = self._get_base_branch()
+        log.info(f"Creating new branch: {branch} from {base_branch}")
+
+        # Checkout base branch with fallback to default
+        checkout_result = self.git.run("checkout", base_branch)
+        if checkout_result.returncode != 0:
+            default_branch = self.github.default_branch
+            log.warning(f"Base branch {base_branch} doesn't exist, falling back to {default_branch}")
+            base_branch = default_branch
+            self.git.run("checkout", base_branch)
+
+        # Pull with merge strategy
+        self.git.run("pull", "--no-rebase", "origin", base_branch)
+
+        # Create new branch
+        self.git.create_branch(branch)
+
+    def _handle_max_turns_reached(self, issue, state: SessionState, branch: str) -> IssueResult:
+        """Handle case where Claude Code reached max turns."""
+        state.add_note(f"Session {state.session_count}: Reached max turns, needs continuation")
+        self.session_manager.save_state(state)
+
+        # Add GitHub comment with cost
+        self.github.add_issue_comment(
+            issue,
+            f"[AGENT] **Session {state.session_count} completed**\n\n"
+            f"- Turns used: {state.total_turns_used}\n"
+            f"- Tokens: {state.total_tokens:,}\n"
+            f"- Cost so far: ${state.total_cost_usd:.4f}\n\n"
+            f"_Continuing work in next session..._"
+        )
+
+        return IssueResult(
+            success=False,
+            branch=branch,
+            needs_continuation=True,
+            error="Reached max turns, will continue"
+        )
+
+    def _handle_no_changes(self, issue, state: SessionState, branch: str) -> IssueResult:
+        """Handle case where no code changes were made (issue already resolved)."""
+        log.info("No code changes were made. Checking if issue was already solved...")
+
+        comment = (
+            f"[OK] This issue appears to be already resolved.\n\n"
+            f"The agent attempted to implement this but found no code changes were necessary, "
+            f"which typically means the fix was already merged in a previous PR.\n\n"
+            f"**Agent Stats:**\n"
+            f"- Sessions: {state.session_count}\n"
+            f"- Total tokens: {state.total_tokens:,}\n"
+            f"- Cost: ${state.total_cost_usd:.4f} USD\n\n"
+            f"Closing as already resolved."
+        )
+
+        try:
+            issue.create_comment(comment)
+            issue.edit(state="closed")
+            log.info(f"Issue #{issue.number} closed - already resolved")
+        except Exception as e:
+            log.warning(f"Could not close issue: {e}")
+
+        state.add_note("No file changes - issue already resolved, closed automatically")
+        state.completed = True
+        self.session_manager.save_state(state)
+        self.session_manager.delete_state(issue.number)
+
+        return IssueResult(success=True, branch=branch, pr_url="")
+
+    def _create_or_find_pr(self, issue, state: SessionState, branch: str, output: str) -> str:
+        """
+        Create PR or find existing one.
+
+        Args:
+            issue: GitHub Issue object
+            state: Session state
+            branch: Branch name
+            output: Claude Code output
+
+        Returns:
+            PR URL
+        """
+        issue_num = issue.number
+
+        # Build PR body suffix with stats
+        tool_usage = self._count_tool_usage(state.last_output if state.last_output else output)
+        pr_body_suffix = (
+            f"\n## [AGENT] Agent Stats\n\n"
+            f"- **Sessions:** {state.session_count}\n"
+            f"- **Total turns:** {state.total_turns_used}\n"
+            f"- **Total tokens:** {state.total_tokens:,}\n"
+            f"- **Estimated cost:** ${state.total_cost_usd:.4f} USD\n"
+        )
+
+        if tool_usage:
+            pr_body_suffix += "\n**Custom Tools Used:**\n"
+            for tool, count in tool_usage.items():
+                if tool == 'semantic_search':
+                    pr_body_suffix += f"- `semantic_search.py`: {count} searches (AI-powered code search)\n"
+                elif tool == 'smart_test':
+                    pr_body_suffix += f"- `smart_test.py`: {count} test runs (filtered test output)\n"
+        else:
+            pr_body_suffix += "\n**Custom Tools Used:** None\n"
+
+        # Check if Claude Code already created a PR
+        import re
+        pr_url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/\d+', output)
+        if pr_url_match:
+            pr_url = pr_url_match.group(0)
+            log.info(f"Claude Code already created PR: {pr_url}")
+            return pr_url
+
+        # Check if PR already exists for this branch
+        existing_pr = self.github.get_pr_by_branch(branch)
+        if existing_pr:
+            pr_url = existing_pr.html_url
+            log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
+            return pr_url
+
+        # Create new PR
+        base_branch = self._get_base_branch()
+        previous_pr_number = None
+        default_branch = self.github.default_branch
+
+        if self.config.enable_stacked_prs and base_branch != default_branch:
+            previous_pr = self.github.get_pr_by_branch(base_branch)
+            if previous_pr:
+                previous_pr_number = previous_pr.number
+                log.info(f"Stacking on PR #{previous_pr_number} ({base_branch})")
+
+        try:
+            pr_url = self.github.create_pull_request(
+                branch, issue,
+                body_suffix=pr_body_suffix,
+                summary=output,
+                base=base_branch,
+                previous_pr_number=previous_pr_number
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+
+            if "pull request already exists" in error_str or ("422" in str(e) and "already exists" in error_str):
+                log.warning(f"PR already exists for branch {branch}, fetching it...")
+                existing_pr = self.github.get_pr_by_branch(branch)
+                if existing_pr:
+                    pr_url = existing_pr.html_url
+                    log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
+                else:
+                    log.error(f"PR exists but couldn't find it for branch {branch}")
+                    raise
+            elif "base" in error_str and "invalid" in error_str:
+                log.warning(f"Base branch {base_branch} invalid, falling back to {default_branch}")
+                pr_url = self.github.create_pull_request(
+                    branch, issue,
+                    body_suffix=pr_body_suffix,
+                    summary=output,
+                    base=default_branch,
+                    previous_pr_number=None
+                )
+            else:
+                raise
+
+        return pr_url
+
+    def _handle_error(self, issue, state: SessionState, branch: str, error: Exception) -> IssueResult:
+        """Handle errors during issue processing."""
+        issue_num = issue.number
+        log.exception(f"Failed processing issue #{issue_num}")
+        state.add_note(f"Error: {str(error)[:200]}")
+        self.session_manager.save_state(state)
+
+        # Re-add label for retry (max 3 attempts)
+        if state.session_count < 3:
+            try:
+                log.info(f"Re-adding agent-task label to issue #{issue_num} after failure (attempt {state.session_count}/3)")
+                issue.add_to_labels(self.config.issue_label)
+            except Exception as label_error:
+                log.warning(f"Could not re-add label: {label_error}")
+        else:
+            log.error(f"Issue #{issue_num} failed {state.session_count} times, giving up.")
+            log.error(f"Manual intervention required. Last error: {str(error)[:500]}")
+            try:
+                import socket
+                hostname = socket.gethostname()
+                issue.create_comment(
+                    f"❌ Agent `{hostname}` failed to complete this issue after {state.session_count} attempts.\n\n"
+                    f"Last error: `{str(error)[:300]}`\n\n"
+                    f"Please investigate manually."
+                )
+            except:
+                pass
+
+        return IssueResult(success=False, branch=branch, error=str(error))
+
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
         Build the implementation prompt for Claude Code.
@@ -186,164 +515,14 @@ class Agent:
         Returns:
             Formatted prompt string
         """
-        # Determine if working on existing feature branch
-        is_feature_branch = state and not state.branch_name.startswith(self.config.branch_prefix)
-        branch_note = f"\n**IMPORTANT:** You are working on existing branch: `{state.branch_name}`\nDo NOT create a new branch. All work must be on this branch." if is_feature_branch else ""
-
-        if state and state.session_count > 0:
-            # Continuation prompt
-            prompt = f"""You are continuing work on issue #{issue.number}: {issue.title}
-
-## Progress So Far
-
-Session {state.session_count + 1} - Total turns used: {state.total_turns_used}
-Branch: {state.branch_name}{branch_note}
-
-{chr(10).join(state.notes[-5:])}  # Last 5 notes
-
-## Your Task
-
-Continue where you left off. Review what's been done, then:
-1. Check build status: `dotnet build`
-2. Check test status: `dotnet test`
-3. Continue implementing missing pieces
-4. Fix any failing tests
-5. **IMPORTANT:** Re-read the issue title to determine type:
-   - "Investigate"/"Test"/"Verify" → ONLY write tests, NO UI
-   - "Add feature"/"Implement UI" → Full vertical slice (Core + ViewModel + View)
-
-**Do not give up!** Take as many attempts as needed to get tests passing.
-
-Read CLAUDE.md for all project conventions."""
-        else:
-            # Initial prompt
-            prompt = f"""You are a senior C# / Avalonia developer implementing issue #{issue.number}: {issue.title}
-{branch_note}
-
-## CRITICAL: Read CLAUDE.md First
-
-The repository contains `CLAUDE.md` with complete architecture guidelines. **Read it immediately.**
-
-## Architecture Guidelines
-
-**For NEW FEATURES:** Follow Vertical Slice Architecture:
-1. Core logic (Connect-A-Pic-Core/)
-2. ViewModel (CAP.Avalonia/ViewModels/) with [ObservableProperty] and [RelayCommand]
-3. View/AXAML (MainWindow.axaml or new view)
-4. DI wiring (App.axaml.cs if needed)
-5. Unit tests (UnitTests/)
-6. Integration tests (Core + ViewModel)
-
-**For TESTS-ONLY or BUGFIXES:** UI is NOT required. Focus on:
-- Writing comprehensive tests
-- Fixing the specific bug
-- No need for ViewModel/View if not adding user-facing features
-
-**CRITICAL: Determine the issue type BEFORE starting:**
-
-- ✅ **Test/Investigation issue** → Write ONLY tests, NO UI/ViewModel
-  - Keywords: "test", "verify", "investigate", "reproduce", "confirm bug"
-  - Example: "Investigate: PDK coordinate mismatch" → ONLY write tests
-  - Example: "Add test: GDS roundtrip" → ONLY write tests
-
-- ✅ **User-facing feature** → Full vertical slice (Core + ViewModel + View)
-  - Keywords: "add feature", "implement UI", "user can", "new panel"
-  - Example: "Add export dialog" → Full vertical slice required
-
-**If in doubt, it's probably a test-only issue.** The user will explicitly say if they want UI.
-
-## Code Quality Rules
-
-- **Max 250 lines per NEW file**
-- SOLID principles strictly
-- Methods max ~20 lines
-- Use CommunityToolkit.Mvvm patterns
-- XML documentation for all public members
-- No magic numbers
-
-## Build & Verification
-
-Before finishing:
-1. `dotnet build` — must succeed
-2. `dotnet test` — all tests must pass
-3. Fix all errors and warnings
-4. **Do not stop until everything works**
-
-## Issue #{issue.number}: {issue.title}
-
-{issue.body or 'No description provided.'}
-
-## YOUR TASK
-
-1. **First:** Read `CLAUDE.md` for architecture patterns and `CODEBASE_MAP.md` for codebase overview
-2. **Search efficiently:** Use glob patterns to find relevant files instead of reading everything
-   - Example: Use `**/*ViewModel.cs` to find all ViewModels
-   - Example: Use `**/MainWindow.axaml` to find the main UI
-3. **Find similar features:** Search for existing features similar to what you're building
-   - Example: For analysis features, check `Analysis/ParameterSweep*` files
-   - Example: For UI features, check existing ViewModel patterns
-4. **Implement complete solution:**
-   - For NEW FEATURES: Core → ViewModel → View → Tests (full vertical slice)
-   - For TESTS/BUGFIXES/INVESTIGATIONS: Just write tests or fix the bug (NO UI/ViewModel needed)
-   - **"Investigate" issues = write diagnostic tests, NOT UI panels**
-5. **Build and test iteratively:** Fix errors immediately, don't accumulate them
-6. **PERSISTENCE:** Complex issues may take many attempts - keep trying until tests pass!
-
-## EFFICIENCY TIPS
-
-- Don't read entire files unless necessary - use grep/search first
-- Reuse existing patterns from similar features
-- Test early and often (dotnet build && dotnet test)
-- Keep files under 250 lines (split if needed)
-
-## 🔍 SEMANTIC SEARCH TOOL
-
-You have access to a semantic code search tool that uses AI embeddings to find relevant code.
-
-**IMPORTANT:** The tools are in a separate Python venv. Use the full path to the venv Python:
-
-```bash
-/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "your search query"
-```
-
-**Examples:**
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "ViewModel for analysis features"`
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "where is bounding box calculation?"`
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "test files for parameter sweeping"`
-
-This is MUCH better than grep for finding relevant code! Use it early and often.
-
-## 🧪 SMART TEST TOOL
-
-**IMPORTANT:** Do NOT use `dotnet test` directly! Use the smart test tool instead.
-
-The tool is in a separate location - use the full path:
-
-```bash
-/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [optional-filter]
-```
-
-This filters output to show only summary instead of all 1193 test results!
-
-**Examples:**
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py` - Run all tests, show compact summary
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py ParameterSweeper` - Run only ParameterSweeper tests
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py BoundingBox` - Run only BoundingBox-related tests
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py --file MyFeatureTests.cs` - Run specific test file
-
-The tool shows:
-- [OK]/[FAIL] Pass/Fail status
-- Number of tests (passed/failed/skipped)
-- Duration
-- Failed test names (if any)
-
-Much cleaner than raw dotnet output!"""
-
-        return prompt
+        from .prompt_template import build_prompt
+        return build_prompt(issue, state)
 
     def process_issue(self, issue) -> IssueResult:
         """
         Process an issue with multi-session support.
+
+        This is the main orchestrator that delegates to smaller, focused methods.
 
         Args:
             issue: GitHub Issue object
@@ -353,329 +532,61 @@ Much cleaner than raw dotnet output!"""
         """
         issue_num = issue.number
 
-        # Check if issue is still open
-        if issue.state != "open":
-            log.warning(f"Issue #{issue_num} is closed (state: {issue.state})")
-            # Clean up any existing session
-            state = self.session_manager.load_state(issue_num)
-            if state:
-                log.info(f"Deleting session for closed issue #{issue_num}")
-                self.session_manager.delete_state(issue_num)
-            return IssueResult(success=False, branch="", error=f"Issue is closed")
-
-        # Check for existing session
-        state = self.session_manager.load_state(issue_num)
-
-        if state:
-            log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
-            branch = state.branch_name
-            # Also remove label when resuming (in case it was re-added)
-            try:
-                issue.remove_from_labels(self.config.issue_label)
-                log.info(f"Removed agent-task label from resumed issue #{issue_num}")
-            except Exception as e:
-                log.warning(f"Could not remove label from issue #{issue_num}: {e}")
-        else:
-            # New session - LOCK the issue by removing agent-task label
-            # This prevents other agents from picking up the same issue
-            try:
-                log.info(f"Claiming issue #{issue_num} by removing agent-task label")
-                issue.remove_from_labels(self.config.issue_label)
-                log.info(f"Issue #{issue_num} locked (label removed)")
-
-                # Add comment indicating which agent is working on this
-                import socket
-                hostname = socket.gethostname()
-                issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
-                log.info(f"Posted claim comment with hostname: {hostname}")
-            except Exception as e:
-                log.warning(f"Could not remove label or post comment on issue #{issue_num}: {e}")
-                log.warning("This might indicate expired GitHub token or permission issue")
-                log.warning("Continuing anyway, but other agents might pick this up too")
-
-            # Check if issue specifies a branch
-            target_branch = self._extract_branch_from_issue(issue)
-
-            if target_branch:
-                branch = target_branch
-                log.info(f"Using existing branch from issue: {branch}")
-            else:
-                # Check if there's already an open PR for this issue (to avoid duplicates after restart)
-                existing_pr = self._find_pr_for_issue(issue_num)
-                if existing_pr:
-                    branch = existing_pr.head.ref
-                    log.info(f"Found existing PR #{existing_pr.number} for issue #{issue_num}, reusing branch: {branch}")
-                else:
-                    # Create new branch
-                    branch = f"{self.config.branch_prefix}issue-{issue_num}-{int(time.time())}"
-                    log.info(f"Creating new branch: {branch}")
-
-            state = self.session_manager.create_state(issue_num, branch)
-            log.info(f"Starting new session for issue #{issue_num}")
-
         try:
-            # Ensure repo is up to date
-            self.git.ensure_cloned()
+            # Step 1: Validate issue and setup/resume session
+            state, branch = self._validate_and_setup_session(issue)
 
-            # Handle branch: checkout existing or create new
-            if self.git.branch_exists(branch):
-                log.info(f"Checking out existing branch: {branch}")
-                # Clean any uncommitted changes before checkout
-                status_result = self.git.run("status", "--porcelain")
-                if status_result.stdout.strip():
-                    log.warning(f"Repository has uncommitted changes on current branch, cleaning before checkout...")
-                    self.git.run("reset", "--hard", "HEAD")
-                    self.git.run("clean", "-fd")
-                self.git.run("checkout", branch)
-                # Clean the feature branch too if it has uncommitted changes
-                status_result = self.git.run("status", "--porcelain")
-                if status_result.stdout.strip():
-                    log.warning(f"Feature branch {branch} has uncommitted changes, cleaning...")
-                    self.git.run("reset", "--hard", "HEAD")
-                    self.git.run("clean", "-fd")
-                # Pull latest changes if it's a feature branch
-                if not branch.startswith(self.config.branch_prefix):
-                    self.git.run("pull", "--no-rebase", "origin", branch)
-            else:
-                # Check if branch exists on remote
-                remote_exists = self.git.run("ls-remote", "--heads", "origin", branch)
-                if remote_exists.returncode == 0 and branch in remote_exists.stdout:
-                    log.info(f"Fetching and checking out remote branch: {branch}")
-                    self.git.run("fetch", "origin", branch)
-                    self.git.run("checkout", "-b", branch, f"origin/{branch}")
-                else:
-                    # Get base branch for stacking
-                    base_branch = self._get_base_branch()
-                    log.info(f"Creating new branch: {branch} from {base_branch}")
+            # Step 2: Prepare branch (checkout or create)
+            self._prepare_branch(branch)
 
-                    # Checkout base branch first (with fallback to default if it doesn't exist)
-                    checkout_result = self.git.run("checkout", base_branch)
-                    if checkout_result.returncode != 0:
-                        default_branch = self.github.default_branch
-                        log.warning(f"Base branch {base_branch} doesn't exist, falling back to {default_branch}")
-                        base_branch = default_branch
-                        self.git.run("checkout", base_branch)
-
-                    # Pull with merge strategy to avoid divergent branches error
-                    self.git.run("pull", "--no-rebase", "origin", base_branch)
-
-                    # Create new branch from base
-                    self.git.create_branch(branch)
-
-            # Build prompt
+            # Step 3: Build prompt and execute Claude Code
             prompt = self._build_prompt(issue, state if state.session_count > 0 else None)
-
-            # Execute Claude Code
             output, reached_max_turns, usage = self.claude.execute(prompt)
             log.info(f"Claude Code output:\n{output[:1000]}...")
 
-            # Update session state with usage stats
+            # Update session stats
             state.increment_session(
                 turns_used=self.config.max_turns if reached_max_turns else 0,
                 tokens=usage.total_tokens,
                 cost=usage.estimated_cost_usd
             )
-            state.last_output = output[:5000]  # Keep last 5k chars
+            state.last_output = output[:5000]
 
+            # Step 4: Handle max turns reached
             if reached_max_turns:
-                state.add_note(f"Session {state.session_count}: Reached max turns, needs continuation")
-                self.session_manager.save_state(state)
+                return self._handle_max_turns_reached(issue, state, branch)
 
-                # Add GitHub comment with cost
-                self.github.add_issue_comment(
-                    issue,
-                    f"[AGENT] **Session {state.session_count} completed**\n\n"
-                    f"- Turns used: {state.total_turns_used}\n"
-                    f"- Tokens: {state.total_tokens:,}\n"
-                    f"- Cost so far: ${state.total_cost_usd:.4f}\n\n"
-                    f"_Continuing work in next session..._"
-                )
-
-                return IssueResult(
-                    success=False,
-                    branch=branch,
-                    needs_continuation=True,
-                    error="Reached max turns, will continue"
-                )
-
-            # Try to commit and push
+            # Step 5: Commit and push changes
             committed = self.git.commit_and_push(
                 branch,
                 f"Agent: implement #{issue_num} — {issue.title}",
                 base_branch=self.github.default_branch,
             )
 
+            # Step 6: Handle no changes (issue already resolved)
             if not committed:
-                # Check if issue was already solved (e.g., merged in another PR)
-                log.info("No code changes were made. Checking if issue was already solved...")
+                return self._handle_no_changes(issue, state, branch)
 
-                # Comment on issue and close it
-                comment = (
-                    f"[OK] This issue appears to be already resolved.\n\n"
-                    f"The agent attempted to implement this but found no code changes were necessary, "
-                    f"which typically means the fix was already merged in a previous PR.\n\n"
-                    f"**Agent Stats:**\n"
-                    f"- Sessions: {state.session_count}\n"
-                    f"- Total tokens: {state.total_tokens:,}\n"
-                    f"- Cost: ${state.total_cost_usd:.4f} USD\n\n"
-                    f"Closing as already resolved."
-                )
+            # Step 7: Create or find PR
+            pr_url = self._create_or_find_pr(issue, state, branch, output)
 
-                try:
-                    issue.create_comment(comment)
-                    issue.edit(state="closed")
-                    log.info(f"Issue #{issue_num} closed - already resolved")
-                except Exception as e:
-                    log.warning(f"Could not close issue: {e}")
-
-                state.add_note("No file changes - issue already resolved, closed automatically")
-                state.completed = True
-                self.session_manager.save_state(state)
-                self.session_manager.delete_state(issue_num)  # Clean up session
-
-                return IssueResult(
-                    success=True,  # Changed to True since issue was handled
-                    branch=branch,
-                    pr_url="",  # No PR needed
-                )
-
-            # Count tool usage from all sessions
-            tool_usage = self._count_tool_usage(state.last_output if state.last_output else output)
-
-            # Create PR with cost information and tool usage
-            pr_body_suffix = (
-                f"\n## [AGENT] Agent Stats\n\n"
-                f"- **Sessions:** {state.session_count}\n"
-                f"- **Total turns:** {state.total_turns_used}\n"
-                f"- **Total tokens:** {state.total_tokens:,}\n"
-                f"- **Estimated cost:** ${state.total_cost_usd:.4f} USD\n"
-            )
-
-            # Add tool usage if any tools were used
-            if tool_usage:
-                pr_body_suffix += "\n**Custom Tools Used:**\n"
-                for tool, count in tool_usage.items():
-                    if tool == 'semantic_search':
-                        pr_body_suffix += f"- `semantic_search.py`: {count} searches (AI-powered code search)\n"
-                    elif tool == 'smart_test':
-                        pr_body_suffix += f"- `smart_test.py`: {count} test runs (filtered test output)\n"
-            else:
-                pr_body_suffix += "\n**Custom Tools Used:** None\n"
-
-            # Check if Claude Code already created a PR (extract from output)
-            pr_url = None
-            import re
-            pr_url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/\d+', output)
-            if pr_url_match:
-                pr_url = pr_url_match.group(0)
-                log.info(f"Claude Code already created PR: {pr_url}")
-
-            # Also check if PR already exists for this branch
-            if not pr_url:
-                existing_pr = self.github.get_pr_by_branch(branch)
-                if existing_pr:
-                    pr_url = existing_pr.html_url
-                    log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
-
-            # Only create PR if Claude Code didn't already create one
-            if not pr_url:
-                # Determine base branch and previous PR for stacking
-                base_branch = self._get_base_branch()
-                previous_pr_number = None
-
-                default_branch = self.github.default_branch
-
-                if self.config.enable_stacked_prs and base_branch != default_branch:
-                    # Find PR number for the base branch
-                    previous_pr = self.github.get_pr_by_branch(base_branch)
-                    if previous_pr:
-                        previous_pr_number = previous_pr.number
-                        log.info(f"Stacking on PR #{previous_pr_number} ({base_branch})")
-
-                # Try to create PR with stacked base, fallback to default if base branch was deleted
-                try:
-                    pr_url = self.github.create_pull_request(
-                        branch, issue,
-                        body_suffix=pr_body_suffix,
-                        summary=output,  # Include Claude Code's summary
-                        base=base_branch,
-                        previous_pr_number=previous_pr_number
-                    )
-                except Exception as e:
-                    error_str = str(e).lower()
-
-                    # Handle "PR already exists" error
-                    if "pull request already exists" in error_str or ("422" in str(e) and "already exists" in error_str):
-                        log.warning(f"PR already exists for branch {branch}, checking if it's ours...")
-
-                        # Try to find the existing PR
-                        existing_pr = self.github.get_pr_by_branch(branch)
-                        if existing_pr:
-                            pr_url = existing_pr.html_url
-                            log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
-                            log.info("Work is already complete, marking as done")
-                        else:
-                            log.error(f"PR exists but couldn't find it for branch {branch}")
-                            raise
-
-                    # Handle invalid base branch
-                    elif "base" in error_str and "invalid" in error_str:
-                        log.warning(f"Base branch {base_branch} is invalid (probably deleted), falling back to {default_branch}")
-                        # Create PR targeting default branch instead
-                        pr_url = self.github.create_pull_request(
-                            branch, issue,
-                            body_suffix=pr_body_suffix,
-                            summary=output,
-                            base=default_branch,
-                            previous_pr_number=None
-                        )
-                    else:
-                        raise
-
+            # Step 8: Close issue and cleanup
             self.github.close_issue(issue, pr_url)
-
-            # Mark session as completed
             state.completed = True
             state.pr_url = pr_url
             state.add_note(f"PR created: {pr_url}")
             self.session_manager.save_state(state)
-
-            # Cleanup after success
             self.session_manager.delete_state(issue_num)
 
             log.info(f"PR created: {pr_url}")
             return IssueResult(success=True, branch=branch, pr_url=pr_url)
 
+        except IssueResult as result:
+            # Early exit from validation
+            return result
         except Exception as e:
-            log.exception(f"Failed processing issue #{issue_num}")
-            state.add_note(f"Error: {str(e)[:200]}")
-            self.session_manager.save_state(state)
-
-            # Re-add agent-task label if processing failed (but only for first 2 attempts)
-            # After 3 failed attempts, give up to avoid infinite loops
-            if state.session_count < 3:
-                try:
-                    log.info(f"Re-adding agent-task label to issue #{issue_num} after failure (attempt {state.session_count}/3)")
-                    issue.add_to_labels(self.config.issue_label)
-                except Exception as label_error:
-                    log.warning(f"Could not re-add label: {label_error}")
-            else:
-                log.error(f"Issue #{issue_num} failed {state.session_count} times, giving up. NOT re-adding label.")
-                log.error(f"Manual intervention required. Last error: {str(e)[:500]}")
-                # Post comment on issue to notify user
-                try:
-                    import socket
-                    hostname = socket.gethostname()
-                    issue.create_comment(
-                        f"❌ Agent `{hostname}` failed to complete this issue after {state.session_count} attempts.\n\n"
-                        f"Last error: `{str(e)[:300]}`\n\n"
-                        f"Please investigate manually."
-                    )
-                except:
-                    pass
-
-            return IssueResult(success=False, branch=branch, error=str(e))
-
+            # Handle any errors
+            return self._handle_error(issue, state, branch, e)
         finally:
             self.git.cleanup()
 
