@@ -61,12 +61,8 @@ class GitRepo:
                 text=True,
             )
         else:
-<<<<<<< Updated upstream
-            self.run("checkout", self.default_branch)
-=======
             working_branch = self.get_working_branch()
             self.run("checkout", working_branch)
->>>>>>> Stashed changes
             self.run("pull", "--ff-only")
 
     def create_branch(self, name: str) -> None:
