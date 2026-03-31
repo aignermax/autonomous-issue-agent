@@ -422,9 +422,12 @@ class InteractiveDashboard(BaseDashboard):
             time.sleep(2)
 
     def handle_update_base_branch(self):
-        """Update base branch (main/dev) with latest changes"""
-        self.console.print("\n[UPDATE] Update Base Branch\n", style="bold yellow")
+        """Automatically update base branches for all repositories"""
+        self.console.print("\n[UPDATE] Updating Base Branches\n", style="bold yellow")
         self.console.print("=" * 80, style="dim")
+        self.console.print("\nThis will:", style="dim")
+        self.console.print("  • Pull latest changes for main/dev in all repos", style="dim")
+        self.console.print("  • Rebase current feature branches (if any)\n", style="dim")
 
         # Get repositories
         repos_str = os.environ.get("AGENT_REPOS", "")
@@ -439,123 +442,8 @@ class InteractiveDashboard(BaseDashboard):
             input("\nPress Enter to continue...")
             return
 
-        # Show repositories
-        self.console.print("\nAvailable repositories:", style="bold white")
-        for i, repo in enumerate(repos, 1):
-            branch = self._get_working_branch(repo)
-            self.console.print(f"  [{i}] {repo} [dim]→ [green]{branch}[/green][/dim]")
-
-        self.console.print(f"\n[a] Update all repositories")
-        self.console.print(f"[1-{len(repos)}] Update specific repository")
-        choice = input("\nYour choice: ").strip().lower()
-
-        if choice == 'a':
-            # Update all
-            self.console.print("\n[+] Updating all base branches...", style="green")
-            for repo in repos:
-                try:
-                    from .agent import Agent
-                    from .config import Config
-
-                    config = Config()
-                    agent = Agent(config)
-
-                    self.console.print(f"\n  → Updating {repo}...", style="cyan")
-                    success = agent.update_base_branch(repo)
-
-                    if success:
-                        self.console.print(f"    ✓ {repo} updated", style="green")
-                    else:
-                        self.console.print(f"    ✗ {repo} failed", style="red")
-                except Exception as e:
-                    self.console.print(f"    ✗ Error: {str(e)[:50]}...", style="red")
-        elif choice.isdigit() and 1 <= int(choice) <= len(repos):
-            # Update specific repo
-            repo = repos[int(choice) - 1]
-            self.console.print(f"\n[+] Updating base branch for {repo}...", style="green")
-
-            try:
-                from .agent import Agent
-                from .config import Config
-
-                config = Config()
-                agent = Agent(config)
-
-                success = agent.update_base_branch(repo)
-
-                if success:
-                    self.console.print(f"\n✓ Base branch updated successfully!", style="green")
-                else:
-                    self.console.print(f"\n✗ Failed to update base branch", style="red")
-            except Exception as e:
-                self.console.print(f"\n✗ Error: {e}", style="red")
-
-        input("\nPress Enter to continue...")
-
-    def handle_restart_issue(self):
-        """Restart work on an issue from scratch"""
-        self.console.print("\n[RESTART] Restart Issue from Scratch\n", style="bold yellow")
-        self.console.print("=" * 80, style="dim")
-
-        # Get repositories
-        repos_str = os.environ.get("AGENT_REPOS", "")
-        if repos_str:
-            repos = [r.strip() for r in repos_str.split(",") if r.strip()]
-        else:
-            repos = [os.environ.get("AGENT_REPO", "")]
-            repos = [r for r in repos if r]
-
-        if not repos:
-            self.console.print("\n[!] No repositories configured!", style="red")
-            input("\nPress Enter to continue...")
-            return
-
-        # Show repositories
-        self.console.print("\nAvailable repositories:", style="bold white")
-        for i, repo in enumerate(repos, 1):
-            self.console.print(f"  [{i}] {repo}")
-
-        # Select repository
-        repo_choice = input(f"\nSelect repository [1-{len(repos)}]: ").strip()
-        if not repo_choice.isdigit() or not (1 <= int(repo_choice) <= len(repos)):
-            self.console.print("\n[!] Invalid choice", style="red")
-            input("\nPress Enter to continue...")
-            return
-
-        repo = repos[int(repo_choice) - 1]
-
-        # Enter issue number
-        issue_num = input("Enter issue number: ").strip()
-        if not issue_num.isdigit():
-            self.console.print("\n[!] Invalid issue number", style="red")
-            input("\nPress Enter to continue...")
-            return
-
-        issue_num = int(issue_num)
-
-        # Confirm options
-        self.console.print("\n[OPTIONS]", style="bold white")
-        update_base = input("Update base branch (main/dev) first? [Y/n]: ").strip().lower() != 'n'
-        delete_branch = input("Delete old feature branch? [y/N]: ").strip().lower() == 'y'
-
-        # Final confirmation
-        self.console.print("\n[WARNING]", style="bold red")
-        self.console.print("This will:", style="yellow")
-        self.console.print("  • Delete session state for issue #" + str(issue_num), style="dim")
-        if update_base:
-            self.console.print("  • Update base branch (pull latest changes)", style="dim")
-        if delete_branch:
-            self.console.print("  • Delete the old feature branch", style="dim")
-        self.console.print("\nThe agent will start from scratch on the next run.", style="yellow")
-
-        confirm = input("\nProceed? [y/N]: ").strip().lower()
-        if confirm != 'y':
-            self.console.print("\n[!] Cancelled", style="yellow")
-            input("\nPress Enter to continue...")
-            return
-
-        # Execute restart
-        self.console.print(f"\n[+] Restarting issue #{issue_num}...", style="green")
+        # Update all repositories
+        self.console.print("[+] Updating all base branches...\n", style="green")
 
         try:
             from .agent import Agent
@@ -564,13 +452,53 @@ class InteractiveDashboard(BaseDashboard):
             config = Config()
             agent = Agent(config)
 
-            success = agent.restart_issue(repo, issue_num, update_base, delete_branch)
+            for repo in repos:
+                try:
+                    branch = self._get_working_branch(repo)
+                    self.console.print(f"  → {repo} [dim]({branch})[/dim]...", style="cyan", end=" ")
+                    success = agent.update_base_branch(repo, rebase_feature_branch=True)
+
+                    if success:
+                        self.console.print("✓", style="green bold")
+                    else:
+                        self.console.print("✗", style="red bold")
+                except Exception as e:
+                    self.console.print(f"✗ [{str(e)[:40]}...]", style="red")
+
+            self.console.print("\n✓ Update complete!", style="green bold")
+        except Exception as e:
+            self.console.print(f"\n✗ Error: {e}", style="red")
+
+        input("\nPress Enter to continue...")
+
+    def handle_restart_issue(self):
+        """Automatically restart the current active issue from scratch"""
+        self.console.print("\n[RESTART] Restarting Current Issue\n", style="bold yellow")
+        self.console.print("=" * 80, style="dim")
+        self.console.print("\nThis will automatically:", style="dim")
+        self.console.print("  • Find the most recent active issue", style="dim")
+        self.console.print("  • Fetch fresh issue data from GitHub", style="dim")
+        self.console.print("  • Update base branch (pull latest main/dev)", style="dim")
+        self.console.print("  • Delete session state", style="dim")
+        self.console.print("  • Delete old feature branch", style="dim")
+        self.console.print("  • Agent will start fresh on next run\n", style="dim")
+
+        try:
+            from .agent import Agent
+            from .config import Config
+
+            config = Config()
+            agent = Agent(config)
+
+            self.console.print("[+] Detecting current issue...", style="green")
+            success = agent.restart_current_issue()
 
             if success:
-                self.console.print(f"\n✓ Issue #{issue_num} reset successfully!", style="green")
-                self.console.print("Agent will start fresh on next run.", style="dim")
+                self.console.print("\n✓ Issue restarted successfully!", style="green bold")
+                self.console.print("The agent will start fresh when you run it next.", style="dim")
             else:
-                self.console.print(f"\n✗ Failed to restart issue", style="red")
+                self.console.print("\n✗ Failed to restart issue", style="red")
+                self.console.print("Check logs for details.", style="dim")
         except Exception as e:
             self.console.print(f"\n✗ Error: {e}", style="red")
 

@@ -658,6 +658,65 @@ Much cleaner than raw dotnet output!"""
             log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
+    def restart_current_issue(self) -> bool:
+        """
+        Automatically detect and restart the most recent active issue.
+
+        This is a simplified version that:
+        1. Finds the most recent active session
+        2. Fetches fresh issue data from GitHub
+        3. Updates base branch
+        4. Deletes session state and old branch
+        5. Agent will start fresh on next run
+
+        Returns:
+            True if restart successful, False otherwise
+        """
+        try:
+            # Find all active sessions
+            session_files = list(self.config.session_dir.glob("issue-*.json"))
+            if not session_files:
+                log.warning("No active sessions found")
+                return False
+
+            # Get the most recently modified session
+            latest_session = max(session_files, key=lambda p: p.stat().st_mtime)
+            issue_number = int(latest_session.stem.split('-')[1])
+
+            log.info(f"Found active session for issue #{issue_number}")
+
+            # Load the session to get branch and determine which repo
+            state = self.session_manager.load_state(issue_number)
+            if not state:
+                log.error(f"Failed to load session state for issue #{issue_number}")
+                return False
+
+            # Try to determine which repository this issue belongs to
+            # We'll check all configured repos
+            found_repo = None
+            for repo_name in self.config.repo_names:
+                try:
+                    self._setup_for_repo(repo_name)
+                    issue = self.github.repo.get_issue(issue_number)
+                    found_repo = repo_name
+                    log.info(f"Issue #{issue_number} found in repository: {repo_name}")
+                    log.info(f"Issue title: {issue.title}")
+                    break
+                except Exception:
+                    continue
+
+            if not found_repo:
+                log.error(f"Could not find issue #{issue_number} in any configured repository")
+                return False
+
+            # Now restart with the found repository
+            log.info(f"Restarting issue #{issue_number} from scratch...")
+            return self.restart_issue(found_repo, issue_number, update_base=True, delete_branch=True)
+
+        except Exception as e:
+            log.error(f"Failed to restart current issue: {e}")
+            return False
+
     def restart_issue(self, repo_name: str, issue_number: int, update_base: bool = True, delete_branch: bool = False) -> bool:
         """
         Restart work on an issue from scratch.
@@ -712,12 +771,14 @@ Much cleaner than raw dotnet output!"""
             log.error(f"Failed to restart issue #{issue_number}: {e}")
             return False
 
-    def update_base_branch(self, repo_name: str) -> bool:
+    def update_base_branch(self, repo_name: str, rebase_feature_branch: bool = True) -> bool:
         """
         Update the base branch (main/dev) with latest changes from remote.
+        If currently on a feature branch, rebase it onto the updated base.
 
         Args:
             repo_name: Repository name (e.g., "aignermax/Lunima")
+            rebase_feature_branch: If True and on feature branch, rebase it onto updated base
 
         Returns:
             True if update successful, False otherwise
@@ -729,20 +790,43 @@ Much cleaner than raw dotnet output!"""
             # Ensure repo is cloned
             self.git.ensure_cloned()
 
+            # Get current branch before switching
+            current_branch_result = self.git.run("branch", "--show-current")
+            current_branch = current_branch_result.stdout.strip() if current_branch_result.returncode == 0 else None
+
             # Get working branch (dev or main)
             working_branch = self.git.get_working_branch()
 
-            # Checkout and pull
+            # Check if we're on a feature branch
+            is_feature_branch = current_branch and current_branch.startswith(self.config.branch_prefix)
+
+            # Checkout and pull base branch
             log.info(f"Updating base branch: {working_branch}")
             self.git.run("checkout", working_branch)
             result = self.git.run("pull", "--ff-only", "origin", working_branch)
 
-            if result.returncode == 0:
-                log.info(f"✓ Base branch {working_branch} updated successfully")
-                return True
-            else:
+            if result.returncode != 0:
                 log.error(f"Failed to update {working_branch}: {result.stderr}")
                 return False
+
+            log.info(f"✓ Base branch {working_branch} updated successfully")
+
+            # Rebase feature branch if requested and applicable
+            if rebase_feature_branch and is_feature_branch and current_branch:
+                log.info(f"Rebasing feature branch {current_branch} onto {working_branch}")
+                self.git.run("checkout", current_branch)
+                rebase_result = self.git.run("rebase", working_branch)
+
+                if rebase_result.returncode != 0:
+                    log.warning(f"Rebase had conflicts or failed: {rebase_result.stderr}")
+                    log.warning(f"You may need to resolve conflicts manually")
+                    # Try to abort the rebase
+                    self.git.run("rebase", "--abort")
+                    return False
+                else:
+                    log.info(f"✓ Feature branch {current_branch} rebased successfully")
+
+            return True
 
         except Exception as e:
             log.error(f"Failed to update base branch: {e}")
