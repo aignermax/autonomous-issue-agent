@@ -586,10 +586,10 @@ class Dashboard:
             if repo_name in self._branch_cache:
                 return self._branch_cache[repo_name]
 
-            # Check if dev branch exists on remote
+            # Check if dev branch exists on remote (using SSH)
             import subprocess
             result = subprocess.run(
-                ["git", "ls-remote", "--heads", f"https://github.com/{repo_name}.git", "dev"],
+                ["git", "ls-remote", "--heads", f"git@github.com:{repo_name}.git", "dev"],
                 capture_output=True,
                 text=True,
                 timeout=5

@@ -43,9 +43,9 @@ class InteractiveDashboard(BaseDashboard):
         """
         try:
             import subprocess
-            # Check if dev branch exists on remote
+            # Check if dev branch exists on remote (using SSH)
             result = subprocess.run(
-                ["git", "ls-remote", "--heads", f"https://github.com/{repo_name}.git", "dev"],
+                ["git", "ls-remote", "--heads", f"git@github.com:{repo_name}.git", "dev"],
                 capture_output=True,
                 text=True,
                 timeout=5
