@@ -22,7 +22,8 @@ agent.log
 # Repository Clones (cloned by agent at runtime)
 repo/*
 !repo/.gitkeep
-/repo_*  # Multi-repo mode: repo_owner_reponame/ (root level only)
+repo_*/  # Multi-repo mode directories
+repo_*/**  # Everything inside repo_* directories
 
 # Session state files (multi-session persistence)
 .sessions/
