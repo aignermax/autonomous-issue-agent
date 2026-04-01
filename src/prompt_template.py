@@ -28,7 +28,9 @@ Continue where you left off:
    - "Investigate"/"Test"/"Verify" → ONLY tests, NO UI
    - "Add feature"/"Implement UI" → Full stack
 
-**Keep trying!** Use tools/ folder: build_errors.py, semantic_search.py, smart_test.py
+**Keep trying!** Use tools/ folder tools:
+- build_errors.py, semantic_search.py, smart_test.py
+- find_symbol.py (find definitions/usages), dotnet_deps.py (check packages)
 
 Read CLAUDE.md for conventions."""
 
