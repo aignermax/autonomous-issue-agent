@@ -2,7 +2,7 @@
 Prompt templates for Claude Code execution.
 """
 
-CONTINUATION_TEMPLATE = """You are continuing work on issue #{issue_number}: {issue_title}
+CONTINUATION_TEMPLATE = """Continuing work on issue #{issue_number}: {issue_title}
 
 ## Progress So Far
 
@@ -13,18 +13,21 @@ Branch: {branch_name}{branch_note}
 
 ## Your Task
 
-Continue where you left off. Review what's been done, then:
-1. Check build status: `dotnet build`
-2. Check test status: `dotnet test`
-3. Continue implementing missing pieces
+Continue where you left off:
+1. Check build: `dotnet build`
+2. **Use smart test tool** (NOT `dotnet test`):
+   ```bash
+   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
+   ```
+3. Continue implementing missing pieces (use semantic_search.py to find examples)
 4. Fix any failing tests
-5. **IMPORTANT:** Re-read the issue title to determine type:
-   - "Investigate"/"Test"/"Verify" → ONLY write tests, NO UI
-   - "Add feature"/"Implement UI" → Full vertical slice (Core + ViewModel + View)
+5. Re-read issue title:
+   - "Investigate"/"Test"/"Verify" → ONLY tests, NO UI
+   - "Add feature"/"Implement UI" → Full stack
 
-**Do not give up!** Take as many attempts as needed to get tests passing.
+**Keep trying until tests pass!** Use the tools/ folder tools (semantic_search, smart_test).
 
-Read CLAUDE.md for all project conventions."""
+Read CLAUDE.md for conventions."""
 
 INITIAL_TEMPLATE = """Implement issue #{issue_number}: {issue_title}
 {branch_note}
@@ -58,25 +61,27 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 ## YOUR TASK
 
 1. Read `CLAUDE.md` for architecture + `CODEBASE_MAP.md` for overview
-2. Use glob/grep to find relevant files (e.g., `**/*ViewModel.cs`)
+2. **ALWAYS use semantic search first** (better than glob/grep):
+   ```bash
+   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "your natural language query"
+   ```
+   Examples: "ViewModel for analysis", "test files for bounding box", "where is GDS export?"
 3. Find similar features to reuse patterns
 4. Implement:
    - NEW FEATURES → Core + ViewModel + View + Tests
    - TESTS/BUGFIXES → Tests or fix only (NO UI)
-5. Build/test iteratively, fix errors immediately
-6. **Keep trying until tests pass!**
+5. **ALWAYS use smart test tool** (NOT `dotnet test` directly):
+   ```bash
+   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [filter]
+   ```
+   Shows clean summary instead of 1000+ test results!
+6. Build/test iteratively, fix errors immediately
+7. **Keep trying until tests pass!**
 
-## 🔍 Tools
-
-**Semantic search** (AI-powered code search):
-```bash
-/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "query"
-```
-
-**Smart test** (filtered test output):
-```bash
-/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [filter]
-```"""
+## 🚀 IMPORTANT: Use the tools/ folder tools!
+- **semantic_search.py** - AI-powered code search (use instead of grep)
+- **smart_test.py** - Filtered test output (use instead of `dotnet test`)
+These are optimized for this project and save time!
 
 
 def build_prompt(issue, state=None) -> str:
