@@ -68,6 +68,7 @@ class IssueHistory:
     total_tokens: int
     total_cost_usd: float
     session_count: int
+    repository: str = ""  # Repository name (e.g., "akhe-ktop" for akhetonics-desktop)
     timestamp: Optional[datetime] = None
     duration: Optional[timedelta] = None
 
@@ -324,6 +325,14 @@ class DashboardMonitor:
             duplicate_count
         )
 
+    def _format_repo_name(self, repo_name: str) -> str:
+        """Format repository name to first 4 chars + '-' + last 4 chars."""
+        if not repo_name:
+            return ""
+        if len(repo_name) <= 9:  # If 9 or less chars, show full name
+            return repo_name
+        return f"{repo_name[:4]}-{repo_name[-4:]}"
+
     def get_issue_history(self, limit: int = 10) -> List[IssueHistory]:
         """Get recent issue history from agent.log"""
         history = {}  # Use dict to deduplicate by issue number
@@ -359,15 +368,17 @@ class DashboardMonitor:
                             duration = None
 
                             # Search backwards for token/PR/session info
+                            repo_name = ""
                             for j in range(max(0, i-50), min(len(lines), i+5)):
                                 token_match = re.search(r'Token usage: ([\d,]+) tokens.*cost: \$?([\d.]+)', lines[j])
                                 if token_match:
                                     tokens = int(token_match.group(1).replace(',', ''))
                                     cost = float(token_match.group(2))
 
-                                pr_match = re.search(r'https://github.com/[^/]+/[^/]+/pull/(\d+)', lines[j])
+                                pr_match = re.search(r'https://github.com/[^/]+/([^/]+)/pull/(\d+)', lines[j])
                                 if pr_match:
                                     pr_url = pr_match.group(0)
+                                    repo_name = pr_match.group(1)  # Extract repo name from URL
 
                                 # Look for session start to calculate duration
                                 if f"issue #{issue_num}" in lines[j].lower() and "Starting new session" in lines[j]:
@@ -389,6 +400,7 @@ class DashboardMonitor:
                                     total_tokens=tokens,
                                     total_cost_usd=cost,
                                     session_count=1,
+                                    repository=self._format_repo_name(repo_name),
                                     timestamp=timestamp,
                                     duration=duration
                                 )
@@ -639,6 +651,7 @@ class Dashboard:
 
         table = Table(show_header=True, box=None)
         table.add_column("Issue", style="cyan", width=6)
+        table.add_column("Repo", style="magenta", width=9)
         table.add_column("PR", style="green", width=6)
         table.add_column("OK", justify="center", width=3)
         table.add_column("Duration", justify="right", width=9)
@@ -691,6 +704,7 @@ class Dashboard:
 
             table.add_row(
                 issue_str,
+                issue.repository if issue.repository else "-",
                 pr_str,
                 status,
                 duration_str,
