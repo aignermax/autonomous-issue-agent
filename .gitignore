@@ -19,12 +19,16 @@ build/
 *.log
 agent.log
 
-# Repository Clone (cloned by agent at runtime)
+# Repository Clones (cloned by agent at runtime)
 repo/*
 !repo/.gitkeep
+/repo_*  # Multi-repo mode: repo_owner_reponame/ (root level only)
 
 # Session state files (multi-session persistence)
 .sessions/
+
+# WSL-specific virtual environment
+wsl-venv/
 
 # IDE
 .vscode/
