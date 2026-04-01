@@ -177,7 +177,7 @@ Then edit `.env`:
 ```bash
 # Required
 GITHUB_TOKEN=ghp_...                              # GitHub Personal Access Token (repo scope)
-ANTHROPIC_API_KEY=sk-ant-...                      # Anthropic API Key
+ANTHROPIC_API_KEY=sk-ant-...                      # Anthropic API Key (required for CLI automation)
 
 # Target Repositories (choose one mode)
 # Multi-repo mode (recommended): Watch multiple repositories
@@ -186,15 +186,37 @@ AGENT_REPOS=owner/repo1,owner/repo2,owner/repo3   # Comma-separated list
 # AGENT_REPO=owner/your-repo                      # Ignored if AGENT_REPOS is set
 
 # Optional
-AGENT_POLL_INTERVAL=15                            # Polling interval in seconds (default: 15)
+AGENT_POLL_INTERVAL=15                            # Agent polling interval in seconds (default: 15)
+DASHBOARD_REFRESH_INTERVAL=5                      # Dashboard refresh interval in seconds (default: 5)
 AGENT_ISSUE_LABEL=agent-task                      # Issue label to watch (default: agent-task)
-AGENT_MAX_TURNS=30                                # Max Claude Code turns (default: 30)
+AGENT_MAX_TURNS=500                               # Max Claude Code turns (default: 300)
 AGENT_REPO_PATH=./repo                            # Local clone path (default: ./repo)
+
+# Optional: Semantic Search (requires OpenAI for embeddings)
+# OPENAI_API_KEY=sk-...                           # Only needed for semantic_search.py tool
 ```
 
-**How to get tokens:**
-- **GITHUB_TOKEN**: [Create a Personal Access Token](https://github.com/settings/tokens) with `repo` scope
-- **ANTHROPIC_API_KEY**: Get your API key from [Anthropic Console](https://console.anthropic.com/)
+**How to get API keys:**
+
+| API Key | Required? | Cost | How to get |
+|---------|-----------|------|------------|
+| **GITHUB_TOKEN** | ✅ **YES** | Free | [Create Personal Access Token](https://github.com/settings/tokens) with `repo` scope |
+| **ANTHROPIC_API_KEY** | ✅ **YES** | **Pay-per-use** (~$0.20-$2 per issue) | [Anthropic Console](https://console.anthropic.com/) |
+| **OPENAI_API_KEY** | ⚠️ Optional | Pay-per-use | Only needed for semantic_search.py tool |
+
+**Important: Why ANTHROPIC_API_KEY is required**
+
+This agent uses **Claude Code CLI in headless mode** for automation. Unlike the interactive Claude Desktop app which uses OAuth login with Claude Pro/Teams subscriptions, the CLI requires an **API key** for automated/headless operation.
+
+- ❌ **Claude Pro/Teams subscription**: Works for Desktop app, NOT for CLI automation
+- ✅ **Anthropic API Key**: Required for CLI headless mode (separate from subscription)
+- 💰 **Costs**: ~$3/1M input tokens, ~$15/1M output tokens (Claude Sonnet 4)
+- 📊 **Typical usage**: 15-50K tokens per issue = $0.20-$2 per issue
+
+**Cost optimization tips:**
+- Use prompt caching (enabled by default) - saves ~70% on repeated context
+- Set reasonable `AGENT_MAX_TURNS` limits (default: 500)
+- Monitor usage in [Anthropic Console](https://console.anthropic.com/)
 
 ### 4. Add CLAUDE.md to your target repository
 
