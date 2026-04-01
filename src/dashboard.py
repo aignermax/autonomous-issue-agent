@@ -428,8 +428,13 @@ class DashboardMonitor:
                 except:
                     pass
 
-        # Sort by issue number descending
-        result = sorted(history.values(), key=lambda x: x.number, reverse=True)
+        # Sort by timestamp descending (newest first)
+        # Issues without timestamp go to the end
+        result = sorted(
+            history.values(),
+            key=lambda x: x.timestamp if x.timestamp else datetime.min,
+            reverse=True
+        )
         return result[:limit]
 
 
