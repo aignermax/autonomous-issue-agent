@@ -22,8 +22,7 @@ agent.log
 # Repository Clones (cloned by agent at runtime)
 repo/*
 !repo/.gitkeep
-repo_*/  # Multi-repo mode directories
-repo_*/**  # Everything inside repo_* directories
+repo_*/
 
 # Session state files (multi-session persistence)
 .sessions/
@@ -41,3 +40,7 @@ wsl-venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary/build artifacts that shouldn't be committed
+*.tar.gz
+RELEASE_*.md
