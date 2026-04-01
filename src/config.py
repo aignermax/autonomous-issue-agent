@@ -31,6 +31,9 @@ class Config:
         self.max_turns: int = int(os.environ.get("AGENT_MAX_TURNS", "300"))
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
 
+        # Cost control: Maximum tokens per issue (default: 500k = ~€3 per issue)
+        self.max_tokens_per_issue: int = int(os.environ.get("AGENT_MAX_TOKENS_PER_ISSUE", "500000"))
+
         # Stacked PRs - PRs build on each other instead of all on main
         self.enable_stacked_prs: bool = os.environ.get("AGENT_ENABLE_STACKED_PRS", "false").lower() == "true"
 

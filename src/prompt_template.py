@@ -26,57 +26,30 @@ Continue where you left off. Review what's been done, then:
 
 Read CLAUDE.md for all project conventions."""
 
-INITIAL_TEMPLATE = """You are a senior C# / Avalonia developer implementing issue #{issue_number}: {issue_title}
+INITIAL_TEMPLATE = """Implement issue #{issue_number}: {issue_title}
 {branch_note}
 
 ## CRITICAL: Read CLAUDE.md First
+The repo has `CLAUDE.md` with full architecture guidelines. **Read it immediately.**
 
-The repository contains `CLAUDE.md` with complete architecture guidelines. **Read it immediately.**
+## Issue Type
+- **Test/Investigation** ("test", "verify", "investigate") → ONLY tests, NO UI
+- **User feature** ("add feature", "implement UI") → Full stack (Core + ViewModel + View + Tests)
+- **Bugfix** → Fix the bug, add regression test
 
-## Architecture Guidelines
-
-**For NEW FEATURES:** Follow Vertical Slice Architecture:
+## Architecture (for NEW features)
 1. Core logic (Connect-A-Pic-Core/)
-2. ViewModel (CAP.Avalonia/ViewModels/) with [ObservableProperty] and [RelayCommand]
-3. View/AXAML (MainWindow.axaml or new view)
-4. DI wiring (App.axaml.cs if needed)
-5. Unit tests (UnitTests/)
-6. Integration tests (Core + ViewModel)
+2. ViewModel ([ObservableProperty], [RelayCommand])
+3. View/AXAML (MainWindow.axaml)
+4. Tests (UnitTests/)
 
-**For TESTS-ONLY or BUGFIXES:** UI is NOT required. Focus on:
-- Writing comprehensive tests
-- Fixing the specific bug
-- No need for ViewModel/View if not adding user-facing features
+Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 
-**CRITICAL: Determine the issue type BEFORE starting:**
-
-- ✅ **Test/Investigation issue** → Write ONLY tests, NO UI/ViewModel
-  - Keywords: "test", "verify", "investigate", "reproduce", "confirm bug"
-  - Example: "Investigate: PDK coordinate mismatch" → ONLY write tests
-  - Example: "Add test: GDS roundtrip" → ONLY write tests
-
-- ✅ **User-facing feature** → Full vertical slice (Core + ViewModel + View)
-  - Keywords: "add feature", "implement UI", "user can", "new panel"
-  - Example: "Add export dialog" → Full vertical slice required
-
-**If in doubt, it's probably a test-only issue.** The user will explicitly say if they want UI.
-
-## Code Quality Rules
-
-- **Max 250 lines per NEW file**
-- SOLID principles strictly
-- Methods max ~20 lines
-- Use CommunityToolkit.Mvvm patterns
-- XML documentation for all public members
-- No magic numbers
-
-## Build & Verification
-
-Before finishing:
-1. `dotnet build` — must succeed
-2. `dotnet test` — all tests must pass
-3. Fix all errors and warnings
-4. **Do not stop until everything works**
+## Before Finishing
+1. `dotnet build` → must pass
+2. `dotnet test` → all pass
+3. Fix errors/warnings
+4. **Keep trying until it works**
 
 ## Issue #{issue_number}: {issue_title}
 
@@ -84,69 +57,26 @@ Before finishing:
 
 ## YOUR TASK
 
-1. **First:** Read `CLAUDE.md` for architecture patterns and `CODEBASE_MAP.md` for codebase overview
-2. **Search efficiently:** Use glob patterns to find relevant files instead of reading everything
-   - Example: Use `**/*ViewModel.cs` to find all ViewModels
-   - Example: Use `**/MainWindow.axaml` to find the main UI
-3. **Find similar features:** Search for existing features similar to what you're building
-   - Example: For analysis features, check `Analysis/ParameterSweep*` files
-   - Example: For UI features, check existing ViewModel patterns
-4. **Implement complete solution:**
-   - For NEW FEATURES: Core → ViewModel → View → Tests (full vertical slice)
-   - For TESTS/BUGFIXES/INVESTIGATIONS: Just write tests or fix the bug (NO UI/ViewModel needed)
-   - **"Investigate" issues = write diagnostic tests, NOT UI panels**
-5. **Build and test iteratively:** Fix errors immediately, don't accumulate them
-6. **PERSISTENCE:** Complex issues may take many attempts - keep trying until tests pass!
+1. Read `CLAUDE.md` for architecture + `CODEBASE_MAP.md` for overview
+2. Use glob/grep to find relevant files (e.g., `**/*ViewModel.cs`)
+3. Find similar features to reuse patterns
+4. Implement:
+   - NEW FEATURES → Core + ViewModel + View + Tests
+   - TESTS/BUGFIXES → Tests or fix only (NO UI)
+5. Build/test iteratively, fix errors immediately
+6. **Keep trying until tests pass!**
 
-## EFFICIENCY TIPS
+## 🔍 Tools
 
-- Don't read entire files unless necessary - use grep/search first
-- Reuse existing patterns from similar features
-- Test early and often (dotnet build && dotnet test)
-- Keep files under 250 lines (split if needed)
-
-## 🔍 SEMANTIC SEARCH TOOL
-
-You have access to a semantic code search tool that uses AI embeddings to find relevant code.
-
-**IMPORTANT:** The tools are in a separate Python venv. Use the full path to the venv Python:
-
+**Semantic search** (AI-powered code search):
 ```bash
-/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "your search query"
+/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "query"
 ```
 
-**Examples:**
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "ViewModel for analysis features"`
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "where is bounding box calculation?"`
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "test files for parameter sweeping"`
-
-This is MUCH better than grep for finding relevant code! Use it early and often.
-
-## 🧪 SMART TEST TOOL
-
-**IMPORTANT:** Do NOT use `dotnet test` directly! Use the smart test tool instead.
-
-The tool is in a separate location - use the full path:
-
+**Smart test** (filtered test output):
 ```bash
-/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [optional-filter]
-```
-
-This filters output to show only summary instead of all 1193 test results!
-
-**Examples:**
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py` - Run all tests, show compact summary
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py ParameterSweeper` - Run only ParameterSweeper tests
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py BoundingBox` - Run only BoundingBox-related tests
-- `/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py --file MyFeatureTests.cs` - Run specific test file
-
-The tool shows:
-- [OK]/[FAIL] Pass/Fail status
-- Number of tests (passed/failed/skipped)
-- Duration
-- Failed test names (if any)
-
-Much cleaner than raw dotnet output!"""
+/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [filter]
+```"""
 
 
 def build_prompt(issue, state=None) -> str:

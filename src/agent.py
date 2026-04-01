@@ -552,7 +552,27 @@ class Agent:
             )
             state.last_output = output[:5000]
 
-            # Step 4: Handle max turns reached
+            # Step 4a: Check if token budget exceeded
+            if state.total_tokens > self.config.max_tokens_per_issue:
+                log.warning(f"Issue #{issue_num} exceeded token budget: {state.total_tokens:,} > {self.config.max_tokens_per_issue:,}")
+                self.github.add_issue_comment(
+                    issue,
+                    f"⚠️ **Token budget exceeded**\n\n"
+                    f"This issue has consumed {state.total_tokens:,} tokens "
+                    f"(limit: {self.config.max_tokens_per_issue:,}).\n\n"
+                    f"Cost so far: ${state.total_cost_usd:.2f}\n\n"
+                    f"The agent is stopping to prevent excessive costs. "
+                    f"Please review the issue complexity or increase the budget limit if needed."
+                )
+                state.add_note(f"Stopped: Token budget exceeded ({state.total_tokens:,} tokens)")
+                self.session_manager.save_state(state)
+                return IssueResult(
+                    success=False,
+                    branch=branch,
+                    error=f"Token budget exceeded: {state.total_tokens:,} tokens"
+                )
+
+            # Step 4b: Handle max turns reached
             if reached_max_turns:
                 return self._handle_max_turns_reached(issue, state, branch)
 
