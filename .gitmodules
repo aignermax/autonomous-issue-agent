@@ -1,6 +1,3 @@
-[submodule "mcp-servers/netcontext"]
-	path = mcp-servers/netcontext
-	url = https://github.com/willibrandon/NetContextServer.git
 [submodule "tools"]
 	path = tools
 	url = https://github.com/aignermax/python-dev-tools.git
