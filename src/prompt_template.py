@@ -88,11 +88,13 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 7. **Keep trying until tests pass!**
 
 ## 🚀 IMPORTANT: Always use tools/ folder tools!
-- **build_errors.py** - Filtered build output with fix suggestions (use instead of `dotnet build`)
-- **semantic_search.py** - AI-powered code search (use instead of grep)
-- **smart_test.py** - Filtered test output (use instead of `dotnet test`)
+- **build_errors.py** - Filtered build output + fix suggestions (instead of `dotnet build`)
+- **semantic_search.py** - AI code search (instead of grep)
+- **smart_test.py** - Filtered test output (instead of `dotnet test`)
+- **find_symbol.py** - Find class/method definitions + usages (when refactoring/implementing)
+- **dotnet_deps.py** - Check NuGet packages (when debugging references/conflicts)
 
-These tools save 500-5000 tokens per use and make errors easier to fix!
+These tools save 500-5000 tokens per use! Use them frequently!
 
 
 def build_prompt(issue, state=None) -> str:
