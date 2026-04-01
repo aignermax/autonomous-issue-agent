@@ -297,8 +297,8 @@ class ClaudeCode:
         return UsageStats(
             input_tokens=usage_data.get("input_tokens", 0),
             output_tokens=usage_data.get("output_tokens", 0),
-            cache_read_tokens=usage_data.get("cache_read_tokens", 0),
-            cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
+            cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
+            cache_creation_tokens=usage_data.get("cache_creation_input_tokens", 0),
         )
 
     def execute_interactive(self, prompt: str, resume_file: Optional[Path] = None, stream_output: bool = False) -> Tuple[str, bool, UsageStats]:
