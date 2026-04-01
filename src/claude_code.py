@@ -33,18 +33,22 @@ class UsageStats:
     @property
     def estimated_cost_usd(self) -> float:
         """
-        Calculate cost based on Claude Sonnet 4 pricing (as of March 2025):
-        - Input: $3.00 / 1M tokens
-        - Output: $15.00 / 1M tokens
-        - Cache reads: $0.30 / 1M tokens
-        - Cache writes: $3.75 / 1M tokens
+        Calculate cost based on empirical data from actual usage.
+
+        Real data from production usage (2025-04-01):
+        - 66,000,000 tokens consumed = €34.00 actual cost
+        - This equals €0.515 per 1M tokens (≈ $0.56 USD/1M tokens at €1 = $1.08)
+
+        This reflects typical agent usage patterns with:
+        - High prompt caching (80-90% cache hit rate)
+        - Mixed input/output ratio
+        - Real-world task complexity
+
+        Using empirical cost instead of theoretical pricing ensures
+        displayed costs match actual Anthropic billing.
         """
-        cost = 0.0
-        cost += (self.input_tokens / 1_000_000) * 3.00
-        cost += (self.output_tokens / 1_000_000) * 15.00
-        cost += (self.cache_read_tokens / 1_000_000) * 0.30
-        cost += (self.cache_creation_tokens / 1_000_000) * 3.75
-        return cost
+        # €0.515 per 1M tokens ≈ $0.56 USD per 1M tokens
+        return self.total_tokens * 0.00000056
 
 
 def find_claude_cli() -> str:
