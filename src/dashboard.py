@@ -762,10 +762,12 @@ class Dashboard:
 
     def run(self):
         """Run the dashboard"""
+        # Dashboard refresh interval (configurable to avoid API rate limits when multiple instances run)
+        refresh_interval = int(os.environ.get("DASHBOARD_REFRESH_INTERVAL", "5"))
         try:
             with Live(self.generate_display(), refresh_per_second=0.5, screen=True) as live:
                 while True:
-                    time.sleep(2)
+                    time.sleep(refresh_interval)
                     live.update(self.generate_display())
         except KeyboardInterrupt:
             self.console.print("\nDashboard stopped", style="yellow")
