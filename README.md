@@ -218,6 +218,9 @@ This agent uses **Claude Code CLI in headless mode** for automation. Unlike the 
 - Set reasonable `AGENT_MAX_TURNS` limits (default: 500)
 - Monitor usage in [Anthropic Console](https://console.anthropic.com/)
 
+**Accurate cost tracking:**
+The agent now uses `--debug api` mode to capture **all** API calls made by Claude Code during execution (build, test, fix iterations, etc.), not just the final response. This provides accurate cost tracking that matches your Anthropic Console billing. Previous versions would underreport costs by 2-14x depending on task complexity.
+
 ### 4. Add CLAUDE.md to your target repository
 
 The agent reads `CLAUDE.md` from your repository root to understand your project's architecture and coding standards.

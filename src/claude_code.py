@@ -148,7 +148,8 @@ class ClaudeCode:
             "-p", prompt,
             "--output-format", "json",
             "--max-turns", str(self.max_turns),
-            "--dangerously-skip-permissions"
+            "--dangerously-skip-permissions",
+            "--debug", "api"  # Enable API debug logging to capture all token usage
         ]
 
         # Add resume flag if continuing from previous session
@@ -252,7 +253,17 @@ class ClaudeCode:
             response = json.loads(output)
             actual_output = response.get("result", output)
             reached_max_turns = response.get("num_turns", 0) >= self.max_turns
-            usage = self._parse_json_usage(response)
+
+            # Try to parse accumulated usage from debug logs (stderr)
+            # This captures ALL API calls, not just the final one
+            accumulated_usage = self._parse_debug_api_usage(stderr)
+            if accumulated_usage and accumulated_usage.total_tokens > 0:
+                usage = accumulated_usage
+                log.info("Using accumulated usage from debug logs (all API calls)")
+            else:
+                # Fallback to JSON usage (only final call)
+                usage = self._parse_json_usage(response)
+                log.warning("Using JSON usage (may underreport - only shows final API call)")
         except (json.JSONDecodeError, KeyError) as e:
             log.warning(f"Failed to parse JSON output: {e}")
             actual_output = output
@@ -260,7 +271,7 @@ class ClaudeCode:
             usage = UsageStats()
 
         log.info(
-            f"Token usage: {usage.total_tokens} tokens, "
+            f"Token usage: {usage.total_tokens:,} tokens, "
             f"Estimated cost: ${usage.estimated_cost_usd:.4f}"
         )
         return actual_output, reached_max_turns, usage
@@ -300,6 +311,65 @@ class ClaudeCode:
             cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
             cache_creation_tokens=usage_data.get("cache_creation_input_tokens", 0),
         )
+
+    def _parse_debug_api_usage(self, stderr: str) -> Optional[UsageStats]:
+        """
+        Parse accumulated token usage from --debug api output.
+
+        Claude Code's debug output logs each API call with usage stats.
+        We accumulate all of them to get the true total cost.
+
+        Example debug output:
+            [api] Request: {...}
+            [api] Response: {"usage": {"input_tokens": 1234, "output_tokens": 567, ...}}
+
+        Returns:
+            UsageStats with accumulated totals from all API calls, or None if parsing failed
+        """
+        if not stderr:
+            return None
+
+        total_input = 0
+        total_output = 0
+        total_cache_read = 0
+        total_cache_creation = 0
+
+        try:
+            import json
+            # Look for API response logs with usage data
+            for line in stderr.splitlines():
+                # Match lines like: [api] Response: {"usage": {...}}
+                if "[api]" in line.lower() and "usage" in line.lower():
+                    try:
+                        # Extract JSON part (everything after "Response:" or similar)
+                        json_start = line.find("{")
+                        if json_start == -1:
+                            continue
+
+                        json_str = line[json_start:]
+                        data = json.loads(json_str)
+
+                        if "usage" in data:
+                            usage = data["usage"]
+                            total_input += usage.get("input_tokens", 0)
+                            total_output += usage.get("output_tokens", 0)
+                            total_cache_read += usage.get("cache_read_input_tokens", 0)
+                            total_cache_creation += usage.get("cache_creation_input_tokens", 0)
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        continue
+
+            # Only return if we found at least some usage data
+            if total_input > 0 or total_output > 0:
+                return UsageStats(
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                    cache_read_tokens=total_cache_read,
+                    cache_creation_tokens=total_cache_creation,
+                )
+        except Exception as e:
+            log.warning(f"Failed to parse debug API usage: {e}")
+
+        return None
 
     def execute_interactive(self, prompt: str, resume_file: Optional[Path] = None, stream_output: bool = False) -> Tuple[str, bool, UsageStats]:
         """
