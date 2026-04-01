@@ -618,56 +618,58 @@ class Agent:
 
     def run_once(self) -> None:
         """
-        Check for one issue across all repositories and process it (with auto-continuation).
+        Check ONE repository for issues and process if found (with auto-continuation).
 
         Uses round-robin strategy to ensure fair distribution of work across repositories:
-        - Starts checking from the repo after the last one that was processed
-        - If no issue found in any repo after full round, logs and returns
-        - After processing an issue, next run_once() starts from next repo
+        - Each poll cycle checks only ONE repository (reduces API calls)
+        - Rotates through repos: Repo1 → Repo2 → Repo3 → Repo1...
+        - If issue found: process it, then next cycle checks next repo
+        - If no issue found: next cycle checks next repo anyway
+
+        Example with 3 repos (A, B, C):
+        - Cycle 1: Check A → no issue → sleep
+        - Cycle 2: Check B → found issue → process → sleep
+        - Cycle 3: Check C → no issue → sleep
+        - Cycle 4: Check A → ...
+
+        This reduces API calls from N repos/cycle to 1 repo/cycle.
         """
         num_repos = len(self.config.repo_names)
 
-        # Round-robin: start from next repo after last processed one
-        for offset in range(num_repos):
-            repo_index = (self._last_repo_index + 1 + offset) % num_repos
-            repo_name = self.config.repo_names[repo_index]
+        # Round-robin: check ONLY the next repo in rotation
+        self._last_repo_index = (self._last_repo_index + 1) % num_repos
+        repo_name = self.config.repo_names[self._last_repo_index]
 
-            log.info(f"Checking repository: {repo_name}")
-            self._setup_for_repo(repo_name)
+        log.info(f"Checking repository: {repo_name}")
+        self._setup_for_repo(repo_name)
 
-            issue = self.github.find_next_issue(self.config.issue_label)
-            if not issue:
-                log.info(f"No open {self.config.issue_label} issues found in {repo_name}")
-                continue
+        issue = self.github.find_next_issue(self.config.issue_label)
+        if not issue:
+            log.info(f"No open {self.config.issue_label} issues found in {repo_name}")
+            return  # Done for this cycle, next cycle will check next repo
 
-            log.info(f"Found issue #{issue.number} in {repo_name}: {issue.title}")
+        log.info(f"Found issue #{issue.number} in {repo_name}: {issue.title}")
 
-            # Update last repo index before processing (in case processing takes long)
-            self._last_repo_index = repo_index
+        # Process with auto-continuation
+        max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
+        for session in range(max_sessions):
+            result = self.process_issue(issue)
 
-            # Process with auto-continuation
-            max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
-            for session in range(max_sessions):
-                result = self.process_issue(issue)
-
-                if result.success:
-                    log.info(f"Issue #{issue.number} done → {result.pr_url}")
-                    break
-
-                if result.needs_continuation:
-                    log.info(f"Session {session + 1} done, continuing...")
-                    time.sleep(3)  # Brief pause between sessions
-                    continue
-
-                # Failed without continuation
-                log.error(f"Issue #{issue.number} failed: {result.error}")
+            if result.success:
+                log.info(f"Issue #{issue.number} done → {result.pr_url}")
                 break
 
-            # Only process one issue per run_once call
-            # Next run_once() will start from next repo (round-robin)
-            return
+            if result.needs_continuation:
+                log.info(f"Session {session + 1} done, continuing...")
+                time.sleep(3)  # Brief pause between sessions
+                continue
 
-        log.info(f"No {self.config.issue_label} issues found in any repository")
+            # Failed without continuation
+            log.error(f"Issue #{issue.number} failed: {result.error}")
+            break
+
+        # Done processing (or no issue found)
+        # Next run_once() will check next repo in rotation
 
     def run_single_issue(self, issue_number: int) -> None:
         """Process a specific issue by number (for benchmarking).
