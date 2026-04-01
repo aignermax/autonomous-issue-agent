@@ -14,18 +14,21 @@ Branch: {branch_name}{branch_note}
 ## Your Task
 
 Continue where you left off:
-1. Check build: `dotnet build`
-2. **Use smart test tool** (NOT `dotnet test`):
+1. Check build (use build_errors.py):
+   ```bash
+   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/build_errors.py --suggest-fixes
+   ```
+2. Run tests (use smart_test.py):
    ```bash
    /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
    ```
-3. Continue implementing missing pieces (use semantic_search.py to find examples)
-4. Fix any failing tests
+3. Continue implementing (use semantic_search.py to find examples)
+4. Fix any failures
 5. Re-read issue title:
    - "Investigate"/"Test"/"Verify" → ONLY tests, NO UI
    - "Add feature"/"Implement UI" → Full stack
 
-**Keep trying until tests pass!** Use the tools/ folder tools (semantic_search, smart_test).
+**Keep trying!** Use tools/ folder: build_errors.py, semantic_search.py, smart_test.py
 
 Read CLAUDE.md for conventions."""
 
@@ -49,9 +52,15 @@ The repo has `CLAUDE.md` with full architecture guidelines. **Read it immediatel
 Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 
 ## Before Finishing
-1. `dotnet build` → must pass
-2. `dotnet test` → all pass
-3. Fix errors/warnings
+1. **Build** (use build analyzer for cleaner output):
+   ```bash
+   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/build_errors.py --suggest-fixes
+   ```
+2. **Test** (use smart test tool):
+   ```bash
+   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
+   ```
+3. Fix all errors/warnings
 4. **Keep trying until it works**
 
 ## Issue #{issue_number}: {issue_title}
@@ -78,10 +87,12 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 6. Build/test iteratively, fix errors immediately
 7. **Keep trying until tests pass!**
 
-## 🚀 IMPORTANT: Use the tools/ folder tools!
+## 🚀 IMPORTANT: Always use tools/ folder tools!
+- **build_errors.py** - Filtered build output with fix suggestions (use instead of `dotnet build`)
 - **semantic_search.py** - AI-powered code search (use instead of grep)
 - **smart_test.py** - Filtered test output (use instead of `dotnet test`)
-These are optimized for this project and save time!
+
+These tools save 500-5000 tokens per use and make errors easier to fix!
 
 
 def build_prompt(issue, state=None) -> str:
