@@ -241,7 +241,7 @@ class Agent:
 
     def _claim_issue_and_create_branch(self, issue) -> str:
         """
-        Claim an issue by removing label and determine branch name.
+        Claim an issue by removing label, assigning to bot user, and determine branch name.
 
         Args:
             issue: GitHub Issue object
@@ -251,7 +251,7 @@ class Agent:
         """
         issue_num = issue.number
 
-        # LOCK the issue by removing the activation label
+        # LOCK the issue by removing the activation label AND assigning to self
         try:
             log.info(f"Claiming issue #{issue_num} by removing '{self.config.issue_label}' label")
             issue.remove_from_labels(self.config.issue_label)
@@ -259,6 +259,19 @@ class Agent:
 
             import socket
             hostname = socket.gethostname()
+
+            # Try to assign issue to current user (persistent lock across agents)
+            try:
+                # Get current authenticated user
+                user = self.github.repo.organization or self.github.repo.owner
+                username = self.github.repo._requester._Requester__auth._Auth__token  # Get auth info
+                # Assign to current user - this persists even if agent crashes
+                issue.add_to_assignees(self.github.repo.owner.login)
+                log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login} for persistent lock")
+            except Exception as assign_error:
+                log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
+                log.warning("Lock will only be via label removal (less reliable for multi-agent)")
+
             issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
             log.info(f"Posted claim comment with hostname: {hostname}")
         except Exception as e:

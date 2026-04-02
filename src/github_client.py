@@ -32,6 +32,7 @@ class GitHubClient:
         """
         Find the next open issue with the specified activation label.
         Returns the OLDEST issue first (lowest number) to process in order.
+        Skips issues that are already assigned (locked by another agent).
 
         Args:
             label: Issue label to filter by (activation label like "agent-task")
@@ -41,8 +42,16 @@ class GitHubClient:
         """
         # Search for the oldest issue with the activation label
         for issue in self.repo.get_issues(state="open", labels=[label], sort="created", direction="asc"):
-            if not issue.pull_request:
-                return issue
+            # Skip pull requests
+            if issue.pull_request:
+                continue
+
+            # Skip issues that are already assigned (another agent is working on it)
+            if issue.assignees:
+                log.info(f"Skipping issue #{issue.number} - already assigned to {[a.login for a in issue.assignees]}")
+                continue
+
+            return issue
 
         return None
 
@@ -118,6 +127,7 @@ class GitHubClient:
     def close_issue(self, issue, pr_url: str) -> None:
         """
         Close an issue with a comment linking to the PR.
+        Also removes assignment to release the lock.
 
         Args:
             issue: GitHub Issue object
@@ -126,6 +136,15 @@ class GitHubClient:
         issue.create_comment(
             f"Implementation complete. PR: {pr_url}"
         )
+
+        # Remove assignment to release lock
+        try:
+            if issue.assignees:
+                issue.remove_from_assignees(*issue.assignees)
+                log.info(f"Removed assignment from issue #{issue.number} (lock released)")
+        except Exception as e:
+            log.warning(f"Could not remove assignment: {e}")
+
         issue.edit(state="closed")
 
     def add_issue_comment(self, issue, comment: str) -> None:
