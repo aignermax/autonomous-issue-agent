@@ -17,7 +17,8 @@ import argparse
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+# Override=True to ensure .env values take precedence over shell environment
+load_dotenv(override=True)
 
 from src.config import Config
 from src.agent import Agent
