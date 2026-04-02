@@ -6,15 +6,18 @@ cd "$(dirname "$0")"
 echo "🤖 Starting Autonomous Issue Agent"
 echo ""
 
-# Check if venv exists
-if [ ! -d "venv" ]; then
+# Check if WSL venv exists (for WSL environment)
+if [ -d "wsl-venv" ]; then
+    echo "Using WSL virtual environment..."
+    source wsl-venv/bin/activate
+elif [ -d "venv" ]; then
+    echo "Using standard virtual environment..."
+    source venv/bin/activate
+else
     echo "❌ Virtual environment not found!"
-    echo "Run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
+    echo "Run: python3 -m venv wsl-venv && source wsl-venv/bin/activate && pip install -r requirements.txt"
     exit 1
 fi
-
-# Activate virtual environment
-source venv/bin/activate
 
 # Start agent in background (with suspend inhibit if available)
 echo "Starting agent in background..."

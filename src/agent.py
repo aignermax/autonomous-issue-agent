@@ -78,6 +78,27 @@ class Agent:
 
         return tool_counts
 
+    def _detect_issue_complexity(self, issue) -> tuple[int, int, str]:
+        """
+        Detect issue complexity based on presence of complexity modifier tag.
+
+        Args:
+            issue: GitHub Issue object
+
+        Returns:
+            Tuple of (max_turns, max_tokens, complexity_level)
+        """
+        labels = [label.name.lower() for label in issue.labels]
+
+        # Check for complexity modifier tag
+        if self.config.complexity_tag.lower() in labels:
+            log.info(f"Issue #{issue.number} has '{self.config.complexity_tag}' tag → COMPLEX mode: {self.config.max_turns_complex} turns, {self.config.max_tokens_complex:,} tokens")
+            return self.config.max_turns_complex, self.config.max_tokens_complex, "COMPLEX"
+
+        # Default: regular task
+        log.info(f"Issue #{issue.number} without complexity tag → REGULAR mode: {self.config.max_turns_regular} turns, {self.config.max_tokens_regular:,} tokens")
+        return self.config.max_turns_regular, self.config.max_tokens_regular, "REGULAR"
+
     def _extract_branch_from_issue(self, issue) -> Optional[str]:
         """
         Extract target branch name from issue body.
@@ -204,9 +225,10 @@ class Agent:
             # Resume existing session
             log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
             branch = state.branch_name
+            # Remove activation label if it still exists (might have been re-added for retry)
             try:
                 issue.remove_from_labels(self.config.issue_label)
-                log.info(f"Removed agent-task label from resumed issue #{issue_num}")
+                log.info(f"Removed '{self.config.issue_label}' label from resumed issue #{issue_num}")
             except Exception as e:
                 log.warning(f"Could not remove label from issue #{issue_num}: {e}")
         else:
@@ -229,9 +251,9 @@ class Agent:
         """
         issue_num = issue.number
 
-        # LOCK the issue by removing agent-task label
+        # LOCK the issue by removing the activation label
         try:
-            log.info(f"Claiming issue #{issue_num} by removing agent-task label")
+            log.info(f"Claiming issue #{issue_num} by removing '{self.config.issue_label}' label")
             issue.remove_from_labels(self.config.issue_label)
             log.info(f"Issue #{issue_num} locked (label removed)")
 
@@ -531,8 +553,17 @@ class Agent:
             IssueResult with outcome
         """
         issue_num = issue.number
+        state = None
+        branch = None
 
         try:
+            # Step 0: Detect issue complexity and set appropriate limits
+            max_turns, max_tokens, complexity = self._detect_issue_complexity(issue)
+            self.config.max_turns = max_turns
+            self.config.max_tokens_per_issue = max_tokens
+            # Reinitialize ClaudeCode with new turn limit
+            self.claude = ClaudeCode(self.git.path, max_turns)
+
             # Step 1: Validate issue and setup/resume session
             state, branch = self._validate_and_setup_session(issue)
 
@@ -601,9 +632,6 @@ class Agent:
             log.info(f"PR created: {pr_url}")
             return IssueResult(success=True, branch=branch, pr_url=pr_url)
 
-        except IssueResult as result:
-            # Early exit from validation
-            return result
         except Exception as e:
             # Handle any errors
             return self._handle_error(issue, state, branch, e)
@@ -665,7 +693,7 @@ class Agent:
 
         issue = self.github.find_next_issue(self.config.issue_label)
         if not issue:
-            log.info(f"No open {self.config.issue_label} issues found in {repo_name}")
+            log.info(f"No open issues found in {repo_name} with label: {self.config.issue_label}")
             return  # Done for this cycle, next cycle will check next repo
 
         log.info(f"Found issue #{issue.number} in {repo_name}: {issue.title}")
@@ -928,7 +956,7 @@ class Agent:
     def run_forever(self) -> None:
         """Poll loop — runs until killed."""
         log.info(f"Agent started. Polling every {self.config.poll_interval}s.")
-        log.info(f"Repositories: {', '.join(self.config.repo_names)} | Label: {self.config.issue_label}")
+        log.info(f"Repositories: {', '.join(self.config.repo_names)} | Activation Label: {self.config.issue_label} | Complexity Tag: {self.config.complexity_tag}")
 
         while True:
             try:

@@ -160,28 +160,52 @@ Reference: `CAP.Avalonia/ViewModels/ParameterSweepViewModel.cs`
 
 ## 6. Testing
 
-- Write unit tests for all new logic.
+**CRITICAL:** All features MUST have tests before considering work complete.
+
+### Unit Tests
+- Write unit tests for all new core logic classes
 - Test file naming: `{ClassName}Tests.cs`
 - Use xUnit with `[Fact]` and `[Theory]` attributes
 - Shouldly for assertions: `result.ShouldBe(expected)`, `value.ShouldBeGreaterThan(0)`
 - Moq for mocking: `new Mock<IService>()`
-- Tests must be independent and deterministic.
-- Cover edge cases and failure scenarios.
-- Do not remove existing tests unless explicitly required.
+- Tests must be independent and deterministic
+- Cover edge cases and failure scenarios
+- Do not remove existing tests unless explicitly required
 
-**Integration tests** (Core + ViewModel):
+### Integration Tests (REQUIRED)
+**Every feature needs at least one integration test that verifies the full stack:**
+
 ```csharp
 [Fact]
-public void ViewModel_ReflectsCoreAnalysisResults()
+public void FeatureName_WorksEndToEnd_FromUIToCore()
 {
+    // Arrange: Create ViewModel with real core service
     var coreService = new MyAnalyzer();
     var vm = new MyFeatureViewModel(coreService);
+
+    // Act: Trigger the user action (as if user clicked button in UI)
     vm.RunAnalysisCommand.Execute(null);
+
+    // Assert: Verify ViewModel state reflects successful operation
+    vm.IsProcessing.ShouldBeFalse();
     vm.ResultText.ShouldNotBeNullOrEmpty();
+    vm.HasErrors.ShouldBeFalse();
 }
 ```
 
+**Integration tests verify:**
+1. ✅ ViewModel commands work correctly
+2. ✅ Core logic produces expected results
+3. ✅ Results are properly reflected in ViewModel properties (UI-bindable)
+4. ✅ Error handling flows through the stack
+
 Reference: `UnitTests/Analysis/ParameterSweeperTests.cs`
+
+### Test-Driven Quality
+- Run tests after EVERY code change
+- If tests fail, fix immediately — do not continue
+- Aim for >80% code coverage on new code
+- Tests ARE the specification — they prove it works
 
 ---
 
@@ -200,9 +224,22 @@ Follow this checklist for EVERY new feature:
 4. **Add AXAML panel** in `MainWindow.axaml` (right panel section)
 5. **Register in DI** if needed (`App.axaml.cs`)
 6. **Unit tests** for core class
-7. **Integration test** for Core→ViewModel flow
+   - Test all public methods
+   - Test edge cases and error handling
+   - **Run `dotnet test` and ensure all tests pass**
+7. **Integration test** for Core→ViewModel→UI flow
+   - Test that ViewModel commands work
+   - Test that results appear in ViewModel properties (UI-bindable)
+   - **This proves the feature actually works from UI perspective**
+   - **Run `dotnet test` again and ensure integration test passes**
 
 **Do not skip ANY of these steps.**
+
+**Work is NOT complete until:**
+- ✅ All 7 steps are done
+- ✅ `dotnet build` succeeds
+- ✅ `dotnet test` passes with ALL tests green
+- ✅ Feature is visible and usable in the UI
 
 ---
 

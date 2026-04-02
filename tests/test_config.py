@@ -24,8 +24,14 @@ class TestConfig:
         assert config.github_token == "test-token"
         assert config.anthropic_api_key == "test-key"
         assert config.poll_interval == 15  # Default is 15 seconds
-        assert config.max_turns == 300
         assert config.issue_label == "agent-task"
+        assert config.complexity_tag == "complex"
+        assert config.max_turns_regular == 150
+        assert config.max_turns_complex == 500
+        assert config.max_tokens_regular == 8000000
+        assert config.max_tokens_complex == 15000000
+        # Default should be regular limits
+        assert config.max_turns == 150
 
     def test_custom_configuration(self, monkeypatch):
         """Test loading custom configuration from env vars."""
@@ -33,15 +39,19 @@ class TestConfig:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "custom-key")
         monkeypatch.setenv("AGENT_REPO", "user/custom-repo")
         monkeypatch.setenv("AGENT_POLL_INTERVAL", "600")
-        monkeypatch.setenv("AGENT_MAX_TURNS", "500")
+        monkeypatch.setenv("AGENT_MAX_TURNS_REGULAR", "200")
+        monkeypatch.setenv("AGENT_MAX_TURNS_COMPLEX", "600")
         monkeypatch.setenv("AGENT_ISSUE_LABEL", "custom-label")
+        monkeypatch.setenv("AGENT_COMPLEXITY_TAG", "hard")
 
         config = Config()
 
         assert config.repo_name == "user/custom-repo"
         assert config.poll_interval == 600
-        assert config.max_turns == 500
+        assert config.max_turns_regular == 200
+        assert config.max_turns_complex == 600
         assert config.issue_label == "custom-label"
+        assert config.complexity_tag == "hard"
 
     def test_validate_missing_tokens(self, monkeypatch):
         """Test validation with missing tokens."""

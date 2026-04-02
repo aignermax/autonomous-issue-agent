@@ -97,6 +97,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 - **dotnet_deps.py** - Check NuGet packages (when debugging references/conflicts)
 
 These tools save 500-5000 tokens per use! Use them frequently!
+"""
 
 
 def build_prompt(issue, state=None) -> str:

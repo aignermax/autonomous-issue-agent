@@ -56,6 +56,7 @@ class AgentStatus:
     cpu_percent: Optional[float]  # CPU usage percentage
     session_duration: Optional[timedelta]  # How long current session is running
     duplicate_agents: int = 0  # Number of duplicate agent processes detected
+    issue_complexity: Optional[str] = None  # "REGULAR" or "COMPLEX"
 
 
 @dataclass
@@ -229,6 +230,7 @@ class DashboardMonitor:
         last_activity = None
         session_duration = None
         session_start_time = None
+        issue_complexity = None
 
         if self.agent_log.exists():
             try:
@@ -238,6 +240,15 @@ class DashboardMonitor:
 
                 with open(self.agent_log, 'r') as f:
                     lines = f.readlines()[-50:]  # Last 50 lines
+
+                # First pass: check for issue complexity
+                for line in lines:
+                    if "marked as COMPLEX" in line:
+                        issue_complexity = "COMPLEX"
+                        break
+                    elif "marked as REGULAR" in line:
+                        issue_complexity = "REGULAR"
+                        break
 
                 for line in reversed(lines):
                     # Check for sleeping (polling state)
@@ -322,7 +333,7 @@ class DashboardMonitor:
         return AgentStatus(
             True, pid, current_issue, current_turn, max_turns,
             state, next_poll_in, last_activity, cpu_percent, session_duration,
-            duplicate_count
+            duplicate_count, issue_complexity
         )
 
     def _format_repo_name(self, repo_name: str) -> str:
@@ -481,7 +492,15 @@ class Dashboard:
             table.add_row("WARNING", warning_text)
 
         if status.current_issue:
-            table.add_row("Current Issue", f"#{status.current_issue}")
+            if status.issue_complexity:
+                complexity_style = "bold yellow" if status.issue_complexity == "COMPLEX" else "cyan"
+                # Create composite Text object properly
+                issue_display = Text(f"#{status.current_issue} (")
+                issue_display.append(status.issue_complexity, style=complexity_style)
+                issue_display.append(")")
+            else:
+                issue_display = f"#{status.current_issue}"
+            table.add_row("Current Issue", issue_display)
             if status.current_turn and status.max_turns:
                 table.add_row("Progress", f"Turn {status.current_turn}/{status.max_turns}")
         else:
@@ -607,9 +626,12 @@ class Dashboard:
                     else:
                         table.add_row(f"  [{i}]", repo)
 
-        # Show label filter
+        # Show label configuration
         table.add_row("", "")  # Empty row for spacing
-        table.add_row("Label Filter:", "agent-task")
+        activation_label = os.environ.get('AGENT_ISSUE_LABEL', 'agent-task')
+        complexity_tag = os.environ.get('AGENT_COMPLEXITY_TAG', 'complex')
+        table.add_row("Activation Label:", activation_label)
+        table.add_row("Complexity Tag:", complexity_tag)
         table.add_row("Poll Interval:", f"{os.environ.get('AGENT_POLL_INTERVAL', '15')}s")
 
         return Panel(table, title="Configuration", border_style="cyan")

@@ -27,12 +27,27 @@ class Config:
         self.local_path: Path = Path(os.environ.get("AGENT_REPO_PATH", "./repo"))
         self.branch_prefix: str = "agent/"
         self.poll_interval: int = int(os.environ.get("AGENT_POLL_INTERVAL", "15"))
+
+        # Issue activation label: Single label to trigger agent work
         self.issue_label: str = os.environ.get("AGENT_ISSUE_LABEL", "agent-task")
-        self.max_turns: int = int(os.environ.get("AGENT_MAX_TURNS", "300"))
+
+        # Complexity modifier tag: Presence of this tag activates higher limits
+        self.complexity_tag: str = os.environ.get("AGENT_COMPLEXITY_TAG", "complex")
+
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
 
-        # Cost control: Maximum tokens per issue (default: 10M = ~€50 per issue)
-        self.max_tokens_per_issue: int = int(os.environ.get("AGENT_MAX_TOKENS_PER_ISSUE", "10000000"))
+        # Resource limits based on complexity
+        # Regular tasks (agent-task only): Simple fixes, docs, small features
+        self.max_turns_regular: int = int(os.environ.get("AGENT_MAX_TURNS_REGULAR", "150"))
+        self.max_tokens_regular: int = int(os.environ.get("AGENT_MAX_TOKENS_REGULAR", "8000000"))  # 8M tokens ≈ €24-40
+
+        # Complex tasks (agent-task + complex tag): Full features, refactoring, architecture
+        self.max_turns_complex: int = int(os.environ.get("AGENT_MAX_TURNS_COMPLEX", "500"))
+        self.max_tokens_complex: int = int(os.environ.get("AGENT_MAX_TOKENS_COMPLEX", "15000000"))  # 15M tokens ≈ €45-75
+
+        # Defaults (will be overridden per issue based on complexity tag)
+        self.max_turns: int = self.max_turns_regular
+        self.max_tokens_per_issue: int = self.max_tokens_regular
 
         # Stacked PRs - PRs build on each other instead of all on main
         self.enable_stacked_prs: bool = os.environ.get("AGENT_ENABLE_STACKED_PRS", "false").lower() == "true"

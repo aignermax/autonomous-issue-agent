@@ -188,9 +188,16 @@ AGENT_REPOS=owner/repo1,owner/repo2,owner/repo3   # Comma-separated list
 # Optional
 AGENT_POLL_INTERVAL=15                            # Agent polling interval in seconds (default: 15)
 DASHBOARD_REFRESH_INTERVAL=5                      # Dashboard refresh interval in seconds (default: 5)
-AGENT_ISSUE_LABEL=agent-task                      # Issue label to watch (default: agent-task)
-AGENT_MAX_TURNS=500                               # Max Claude Code turns (default: 300)
+AGENT_ISSUE_LABEL=agent-task                      # Activation label - issues must have this (default: agent-task)
+AGENT_COMPLEXITY_TAG=complex                      # Complexity modifier - activates higher limits (default: complex)
 AGENT_REPO_PATH=./repo                            # Local clone path (default: ./repo)
+
+# Resource limits based on complexity
+AGENT_MAX_TURNS_REGULAR=150                       # Max turns for regular tasks (default: 150)
+AGENT_MAX_TOKENS_REGULAR=8000000                  # Max tokens for regular tasks: 8M ≈ €24-40
+
+AGENT_MAX_TURNS_COMPLEX=500                       # Max turns for complex tasks (default: 500)
+AGENT_MAX_TOKENS_COMPLEX=15000000                 # Max tokens for complex tasks: 15M ≈ €45-75
 
 # Optional: Semantic Search (requires OpenAI for embeddings)
 # OPENAI_API_KEY=sk-...                           # Only needed for semantic_search.py tool
@@ -323,6 +330,70 @@ The agent will automatically:
 3. Implement the full vertical slice
 4. Run builds and tests until they pass
 5. Create a PR and close the issue
+
+---
+
+### 🎯 Label-Based Quality Tiers
+
+The agent uses a **two-label system** to balance quality and cost:
+
+1. **Activation Label** (`agent-task`): Marks issues for the agent to pick up
+2. **Complexity Modifier** (`complex`): Optional tag that activates higher resource limits
+
+| Configuration | Max Turns | Token Budget | Est. Cost | Use Case |
+|---------------|-----------|--------------|-----------|----------|
+| **`agent-task`** only | 150 | 8M tokens | €5-25 | Simple fixes, docs, small features |
+| **`agent-task` + `complex`** | 500 | 15M tokens | €30-75 | Full features, refactoring, complex architecture |
+
+**How to choose:**
+
+- ✅ Use **`agent-task`** only for:
+  - Bug fixes
+  - Documentation updates
+  - Simple feature additions
+  - Code cleanup / refactoring (single file)
+  - Adding unit tests
+
+- ✅ Use **`agent-task` + `complex`** for:
+  - Multi-file features with UI + backend
+  - Major refactoring across multiple files
+  - Complex algorithms or business logic
+  - Full vertical slices (Core + ViewModel + View + Tests)
+  - Issues requiring deep codebase understanding
+
+**Cost optimization:**
+- Use mostly `agent-task` only (€5-25/issue) for routine work
+- Add `complex` tag (€30-75/issue) only for challenging problems
+- **Average cost target: €10-20/issue** (80% regular + 20% complex)
+
+**Example:**
+
+Simple issue:
+```markdown
+Title: Fix typo in README
+Labels: agent-task
+
+Body:
+Fix the typo "recieve" → "receive" in the Getting Started section.
+```
+
+Complex issue:
+```markdown
+Title: Add real-time simulation preview
+Labels: agent-task, complex
+
+Body:
+Implement a real-time simulation preview feature with WebGL rendering.
+
+Requirements:
+- Core simulation engine with incremental updates
+- ViewModel with async command handling
+- WebGL render component in UI
+- Unit tests for simulation logic
+- Integration test for end-to-end preview
+```
+
+---
 
 ## Logs
 

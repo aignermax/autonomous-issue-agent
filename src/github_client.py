@@ -30,18 +30,20 @@ class GitHubClient:
 
     def find_next_issue(self, label: str):
         """
-        Find the next open issue with the specified label.
+        Find the next open issue with the specified activation label.
         Returns the OLDEST issue first (lowest number) to process in order.
 
         Args:
-            label: Issue label to filter by
+            label: Issue label to filter by (activation label like "agent-task")
 
         Returns:
             Issue object or None if no issues found
         """
+        # Search for the oldest issue with the activation label
         for issue in self.repo.get_issues(state="open", labels=[label], sort="created", direction="asc"):
             if not issue.pull_request:
                 return issue
+
         return None
 
     def get_pr_by_branch(self, branch: str):
