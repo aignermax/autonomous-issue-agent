@@ -197,7 +197,7 @@ class ClaudeCode:
                 last_mtime = current_mtime
                 consecutive_idle_checks = 0
                 activity_detected = True
-                log.debug(f"Activity detected: files modified")
+                log.info(f"Claude Code activity: files modified")
 
             # Check 2: CPU usage (indicates thinking/processing)
             try:
@@ -210,13 +210,18 @@ class ClaudeCode:
                     last_activity_time = time.time()
                     consecutive_idle_checks = 0
                     activity_detected = True
-                    log.debug(f"Activity detected: CPU {cpu_percent:.1f}%")
+                    log.info(f"Claude Code activity: CPU {cpu_percent:.1f}%")
                 else:
                     # Low CPU for extended time might indicate stuck
                     consecutive_idle_checks += 1
             except (ImportError, Exception) as e:
                 # psutil not available or process check failed
                 log.debug(f"Could not check CPU (psutil not available or process gone): {e}")
+
+            # Log idle status periodically (every 5 checks = 5 minutes)
+            if not activity_detected and consecutive_idle_checks % 5 == 0:
+                idle_mins = int(inactivity_duration / 60)
+                log.info(f"Claude Code idle for {idle_mins} min ({consecutive_idle_checks} checks)")
 
             # Check for inactivity timeout
             inactivity_duration = time.time() - last_activity_time

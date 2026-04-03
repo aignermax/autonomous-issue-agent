@@ -71,10 +71,22 @@ class GitRepo:
                 self._ensure_clean_state()
                 self.run("checkout", working_branch)
 
+            # Fetch latest changes first
+            fetch_result = self.run("fetch", "origin")
+            if fetch_result.returncode != 0:
+                log.error(f"Failed to fetch from origin")
+                raise RuntimeError(f"Failed to fetch: {fetch_result.stderr}")
+
+            # Try fast-forward pull first
             pull_result = self.run("pull", "--ff-only")
             if pull_result.returncode != 0:
-                log.error(f"Pull failed, repository may be in inconsistent state")
-                raise RuntimeError(f"Failed to pull {working_branch}: {pull_result.stderr}")
+                # If fast-forward fails (diverging branches), reset to remote state
+                log.warning(f"Fast-forward pull failed (diverging branches), resetting to origin/{working_branch}")
+                reset_result = self.run("reset", "--hard", f"origin/{working_branch}")
+                if reset_result.returncode != 0:
+                    log.error(f"Failed to reset to origin/{working_branch}")
+                    raise RuntimeError(f"Failed to reset to remote: {reset_result.stderr}")
+                log.info(f"Successfully reset local repository to origin/{working_branch}")
 
     def _ensure_clean_state(self) -> None:
         """
@@ -143,7 +155,48 @@ class GitRepo:
 
         if unpushed_count > 0:
             log.info(f"Found {unpushed_count} unpushed commit(s), pushing to origin...")
-            self.run("push", "--set-upstream", "origin", branch)
+
+            # Try to push - if rejected due to diverging branches, fetch and handle conflict
+            push_result = self.run("push", "--set-upstream", "origin", branch)
+
+            if push_result.returncode != 0:
+                # Push failed - check if it's because of diverging branches
+                if "rejected" in push_result.stderr and "fetch first" in push_result.stderr:
+                    log.warning(f"Push rejected - remote branch has diverged")
+
+                    # Fetch latest remote state
+                    self.run("fetch", "origin", branch)
+
+                    # Check if we have diverging commits
+                    behind_result = self.run("rev-list", "--count", f"{branch}..origin/{branch}")
+                    ahead_result = self.run("rev-list", "--count", f"origin/{branch}..{branch}")
+
+                    commits_behind = int(behind_result.stdout.strip() or "0") if behind_result.returncode == 0 else 0
+                    commits_ahead = int(ahead_result.stdout.strip() or "0") if ahead_result.returncode == 0 else 0
+
+                    log.info(f"Branch status: {commits_ahead} ahead, {commits_behind} behind remote")
+
+                    # If we're only ahead (remote has no new commits we don't have), force push is safe
+                    # This handles the case where Claude Code created commits locally that differ from remote
+                    if commits_behind == 0 and commits_ahead > 0:
+                        log.info("Local has new commits, remote hasn't diverged - force pushing")
+                        force_push = self.run("push", "--force-with-lease", "origin", branch)
+                        if force_push.returncode != 0:
+                            log.error(f"Force push failed: {force_push.stderr}")
+                            raise RuntimeError(f"Failed to push branch {branch}: {force_push.stderr}")
+                    else:
+                        # True divergence - remote has commits we don't have
+                        log.error(f"Branch has truly diverged - cannot safely push")
+                        log.error(f"Remote has {commits_behind} commits we don't have locally")
+                        raise RuntimeError(
+                            f"Branch {branch} has diverged: {commits_ahead} ahead, {commits_behind} behind. "
+                            "Manual intervention required."
+                        )
+                else:
+                    # Different push error
+                    log.error(f"Push failed: {push_result.stderr}")
+                    raise RuntimeError(f"Failed to push branch {branch}: {push_result.stderr}")
+
             return True
 
         # IMPORTANT: Check if branch has commits that differ from base branch
