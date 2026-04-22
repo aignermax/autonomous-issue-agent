@@ -7,7 +7,8 @@ echo "🤖 Starting Autonomous Issue Agent"
 echo ""
 
 # Add development tools to PATH
-export PATH="$HOME/.dotnet:$HOME/.cargo/bin:$PATH"
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$HOME/.cargo/bin:$PATH"
 
 # Check if WSL venv exists (for WSL environment)
 if [ -d "wsl-venv" ]; then
@@ -29,6 +30,7 @@ command -v dotnet &> /dev/null && echo "  ✅ .NET SDK $(dotnet --version 2>/dev
 command -v rustc &> /dev/null && echo "  ✅ Rust $(rustc --version 2>/dev/null | awk '{print $2}')" || echo "  ⚠️  Rust not found"
 command -v node &> /dev/null && echo "  ✅ Node.js $(node --version 2>/dev/null)" || echo "  ⚠️  Node.js not found"
 command -v cmake &> /dev/null && echo "  ✅ CMake $(cmake --version 2>/dev/null | head -1 | awk '{print $3}')" || echo "  ⚠️  CMake not found"
+command -v wix &> /dev/null && echo "  ✅ WiX Toolset $(wix --version 2>/dev/null || echo 'v7')" || echo "  ⚠️  WiX not found"
 echo ""
 
 # Start agent in background (with suspend inhibit if available)
