@@ -6,6 +6,9 @@ cd "$(dirname "$0")"
 echo "🤖 Starting Autonomous Issue Agent"
 echo ""
 
+# Add development tools to PATH
+export PATH="$HOME/.dotnet:$HOME/.cargo/bin:$PATH"
+
 # Check if WSL venv exists (for WSL environment)
 if [ -d "wsl-venv" ]; then
     echo "Using WSL virtual environment..."
@@ -18,6 +21,15 @@ else
     echo "Run: python3 -m venv wsl-venv && source wsl-venv/bin/activate && pip install -r requirements.txt"
     exit 1
 fi
+
+# Show available development tools
+echo ""
+echo "Development tools available:"
+command -v dotnet &> /dev/null && echo "  ✅ .NET SDK $(dotnet --version 2>/dev/null || echo 'installed')" || echo "  ⚠️  .NET SDK not found"
+command -v rustc &> /dev/null && echo "  ✅ Rust $(rustc --version 2>/dev/null | awk '{print $2}')" || echo "  ⚠️  Rust not found"
+command -v node &> /dev/null && echo "  ✅ Node.js $(node --version 2>/dev/null)" || echo "  ⚠️  Node.js not found"
+command -v cmake &> /dev/null && echo "  ✅ CMake $(cmake --version 2>/dev/null | head -1 | awk '{print $3}')" || echo "  ⚠️  CMake not found"
+echo ""
 
 # Start agent in background (with suspend inhibit if available)
 echo "Starting agent in background..."
