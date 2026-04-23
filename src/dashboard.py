@@ -57,6 +57,7 @@ class AgentStatus:
     session_duration: Optional[timedelta]  # How long current session is running
     duplicate_agents: int = 0  # Number of duplicate agent processes detected
     issue_complexity: Optional[str] = None  # "REGULAR" or "COMPLEX"
+    current_branch: Optional[str] = None  # Working branch (e.g., "agent/issue-110-...")
 
 
 @dataclass
@@ -224,6 +225,7 @@ class DashboardMonitor:
         # Parse last lines of agent.log to determine state
         state = "polling"
         current_issue = None
+        current_branch = None
         next_poll_in = None
         current_turn = None
         max_turns = None
@@ -241,14 +243,19 @@ class DashboardMonitor:
                 with open(self.agent_log, 'r') as f:
                     lines = f.readlines()[-50:]  # Last 50 lines
 
-                # First pass: check for issue complexity
+                # First pass: check for issue complexity and branch
                 for line in lines:
                     if "marked as COMPLEX" in line:
                         issue_complexity = "COMPLEX"
-                        break
                     elif "marked as REGULAR" in line:
                         issue_complexity = "REGULAR"
-                        break
+
+                    # Extract branch name
+                    if "Creating new branch:" in line or "Checking out existing branch:" in line:
+                        import re
+                        match = re.search(r'branch:\s+(agent/[^\s]+)', line)
+                        if match:
+                            current_branch = match.group(1)
 
                 for line in reversed(lines):
                     # Check for sleeping (polling state)
@@ -333,7 +340,7 @@ class DashboardMonitor:
         return AgentStatus(
             True, pid, current_issue, current_turn, max_turns,
             state, next_poll_in, last_activity, cpu_percent, session_duration,
-            duplicate_count, issue_complexity
+            duplicate_count, issue_complexity, current_branch
         )
 
     def _format_repo_name(self, repo_name: str) -> str:
@@ -501,6 +508,8 @@ class Dashboard:
             else:
                 issue_display = f"#{status.current_issue}"
             table.add_row("Current Issue", issue_display)
+            if status.current_branch:
+                table.add_row("Working Branch", Text(status.current_branch, style="green"))
             if status.current_turn and status.max_turns:
                 table.add_row("Progress", f"Turn {status.current_turn}/{status.max_turns}")
         else:
