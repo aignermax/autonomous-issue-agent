@@ -88,6 +88,11 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
    Shows clean summary instead of 1000+ test results!
 6. Build/test iteratively, fix errors immediately
 7. **Keep trying until tests pass!**
+8. **BEFORE final commit:** Review your own changes:
+   - Check for code quality issues
+   - Look for potential bugs or edge cases
+   - Verify tests cover main scenarios
+   - Fix any issues you find BEFORE committing
 
 ## 🚀 IMPORTANT: Always use tools/ folder tools!
 - **build_errors.py** - Filtered build output + fix suggestions (instead of `dotnet build`)
