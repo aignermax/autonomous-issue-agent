@@ -647,37 +647,11 @@ class Dashboard:
 
     def _get_working_branch(self, repo_name: str) -> Optional[str]:
         """Get working branch for a repository (dev if exists, otherwise default branch) (cached)"""
-        try:
-            # Simple cache - only fetch once per dashboard instance
-            if not hasattr(self, '_branch_cache'):
-                self._branch_cache = {}
-
-            if repo_name in self._branch_cache:
-                return self._branch_cache[repo_name]
-
-            # Check if dev branch exists on remote (using SSH)
-            import subprocess
-            result = subprocess.run(
-                ["git", "ls-remote", "--heads", f"git@github.com:{repo_name}.git", "dev"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                self._branch_cache[repo_name] = "dev"
-                return "dev"
-
-            # Fall back to default branch from GitHub API
-            import sys
-            sys.path.insert(0, str(self.monitor.working_dir / "src"))
-            from github_client import GitHubClient
-            gh = GitHubClient(repo_name)
-            branch = gh.default_branch
-            self._branch_cache[repo_name] = branch
-            return branch
-        except Exception:
-            # Silently fail - don't break dashboard if GitHub API fails
-            return None
+        # PERFORMANCE FIX: Skip slow git ls-remote and GitHub API calls
+        # These were making dashboard refresh take 5+ seconds per repo!
+        # The target branch info is not critical for dashboard display
+        # User can see the actual working branch in Agent Status panel instead
+        return None
 
     def create_history_panel(self, history: List[IssueHistory]) -> Panel:
         """Create issue history panel"""
