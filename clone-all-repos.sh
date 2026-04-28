@@ -30,14 +30,38 @@ for repo in "${REPOS[@]}"; do
     repo_name=$(basename "$repo")
 
     if [ -d "$repo_name" ]; then
-        echo "✅ $repo_name already exists, pulling latest..."
+        echo "✅ $repo_name already exists, updating..."
         cd "$repo_name"
-        git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || echo "  (could not pull)"
+
+        # Try to checkout dev branch, fallback to main/master
+        if git rev-parse --verify dev >/dev/null 2>&1; then
+            echo "  → Switching to dev branch..."
+            git checkout dev 2>/dev/null
+        elif git rev-parse --verify main >/dev/null 2>&1; then
+            echo "  → Using main branch..."
+            git checkout main 2>/dev/null
+        else
+            echo "  → Using master branch..."
+            git checkout master 2>/dev/null
+        fi
+
+        # Pull latest from current branch
+        current_branch=$(git branch --show-current)
+        echo "  → Pulling latest from $current_branch..."
+        git pull origin "$current_branch" 2>/dev/null || echo "  (could not pull)"
         cd ..
     else
         echo "📥 Cloning $repo..."
         if git clone "git@github.com:$repo.git" 2>/dev/null; then
             echo "  ✅ Cloned successfully"
+
+            # Try to checkout dev branch after cloning
+            cd "$repo_name"
+            if git rev-parse --verify dev >/dev/null 2>&1; then
+                echo "  → Switching to dev branch..."
+                git checkout dev 2>/dev/null
+            fi
+            cd ..
         else
             echo "  ❌ Failed to clone (check SSH key or permissions)"
         fi

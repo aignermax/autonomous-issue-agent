@@ -46,6 +46,7 @@ class Agent:
         self.github = None
         self.git = None
         self.claude = None
+        self.current_repo_name = None  # Track current repository being worked on
         self.session_manager = SessionManager(config.session_dir)
         # Round-robin state: track which repo was checked last
         self._last_repo_index = -1
@@ -551,7 +552,7 @@ class Agent:
             Formatted prompt string
         """
         from .prompt_template import build_prompt
-        return build_prompt(issue, state)
+        return build_prompt(issue, state, self.current_repo_name)
 
     def process_issue(self, issue) -> IssueResult:
         """
@@ -658,6 +659,7 @@ class Agent:
         Args:
             repo_name: Repository in format "owner/repo"
         """
+        self.current_repo_name = repo_name  # Track current repo for workspace detection
         self.github = GitHubClient(repo_name)
         # Use HTTPS with token authentication
         token = os.getenv("GITHUB_TOKEN")
