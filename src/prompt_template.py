@@ -94,6 +94,15 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
    - Verify tests cover main scenarios
    - Fix any issues you find BEFORE committing
 
+## ⚠️ CRITICAL: WiX Installer Projects in WSL
+**WiX Toolset CANNOT build MSI installers in WSL!**
+- If issue involves WiX projects (.wixproj) or MSI installers:
+  - Implement the .NET/C# code changes ONLY
+  - DO NOT attempt to build WiX projects
+  - Add comment in PR: "WiX installer build requires Windows - test manually"
+  - Mark as complete after .NET code works
+- Attempting to build WiX in WSL wastes tokens and will always fail!
+
 ## 🚀 IMPORTANT: Always use tools/ folder tools!
 - **build_errors.py** - Filtered build output + fix suggestions (instead of `dotnet build`)
 - **semantic_search.py** - AI code search (instead of grep)
