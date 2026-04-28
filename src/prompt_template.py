@@ -111,6 +111,23 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 - **dotnet_deps.py** - Check NuGet packages (when debugging references/conflicts)
 
 These tools save 500-5000 tokens per use! Use them frequently!
+
+## 📁 Dependency Repositories Available
+**All Akhetonics dependency repos are cloned in workspace at:**
+`/mnt/c/Users/MaxAigner/akhetonics-workspace/`
+
+Available repositories:
+- **akhetonics-desktop** - Main project
+- **raycore-sdk** - Raycore SDK and NuGet packages
+- **raycore-ISA** - Instruction Set Architecture
+- **raycore-Assembler** - Assembler tooling
+- **Lunima** - Additional dependencies
+
+**When you need NuGet package source code or examples:**
+1. Use semantic_search.py across the workspace to find implementations
+2. Check raycore-sdk/ for SDK code
+3. Look in related repos for similar patterns
+4. **DO NOT waste tokens guessing** - the code is available locally!
 """
 
 
