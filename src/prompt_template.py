@@ -16,11 +16,11 @@ Branch: {branch_name}{branch_note}
 Continue where you left off:
 1. Check build (use build_errors.py):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/build_errors.py --suggest-fixes
+   python3 {tools_dir}/build_errors.py --suggest-fixes
    ```
 2. Run tests (use smart_test.py):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
+   python3 {tools_dir}/smart_test.py
    ```
 3. Continue implementing (use semantic_search.py to find examples)
 4. Fix any failures
@@ -56,11 +56,11 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 ## Before Finishing
 1. **Build** (use build analyzer for cleaner output):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/build_errors.py --suggest-fixes
+   python3 {tools_dir}/build_errors.py --suggest-fixes
    ```
 2. **Test** (use smart test tool):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
+   python3 {tools_dir}/smart_test.py
    ```
 3. Fix all errors/warnings
 4. **Keep trying until it works**
@@ -74,7 +74,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 1. Read `CLAUDE.md` for architecture + `CODEBASE_MAP.md` for overview
 2. **ALWAYS use semantic search first** (better than glob/grep):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "your natural language query"
+   python3 {tools_dir}/semantic_search.py "your natural language query"
    ```
    Examples: "ViewModel for analysis", "test files for bounding box", "where is GDS export?"
 3. Find similar features to reuse patterns
@@ -83,7 +83,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
    - TESTS/BUGFIXES → Tests or fix only (NO UI)
 5. **ALWAYS use smart test tool** (NOT `dotnet test` directly):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [filter]
+   python3 {tools_dir}/smart_test.py [filter]
    ```
    Shows clean summary instead of 1000+ test results!
 6. Build/test iteratively, fix errors immediately
@@ -105,18 +105,18 @@ These tools save 500-5000 tokens per use! Use them frequently!
 """
 
 
-def build_prompt(issue, state=None) -> str:
+def build_prompt(issue, state=None, tools_dir: str = "tools") -> str:
     """
     Build the implementation prompt for Claude Code.
 
     Args:
         issue: GitHub Issue object
         state: Optional session state for continuation
+        tools_dir: Absolute path to python-dev-tools directory
 
     Returns:
         Formatted prompt string
     """
-    # Determine if working on existing feature branch
     is_feature_branch = state and not state.branch_name.startswith("agent/issue-")
     branch_note = (
         f"\n**IMPORTANT:** You are working on existing branch: `{state.branch_name}`\n"
@@ -126,7 +126,6 @@ def build_prompt(issue, state=None) -> str:
     )
 
     if state and state.session_count > 0:
-        # Continuation prompt
         recent_notes = "\n".join(state.notes[-5:]) if state.notes else "No notes yet."
         return CONTINUATION_TEMPLATE.format(
             issue_number=issue.number,
@@ -135,13 +134,13 @@ def build_prompt(issue, state=None) -> str:
             total_turns=state.total_turns_used,
             branch_name=state.branch_name,
             branch_note=branch_note,
-            recent_notes=recent_notes
+            recent_notes=recent_notes,
+            tools_dir=tools_dir,
         )
-    else:
-        # Initial prompt
-        return INITIAL_TEMPLATE.format(
-            issue_number=issue.number,
-            issue_title=issue.title,
-            branch_note=branch_note,
-            issue_body=issue.body or "No description provided."
-        )
+    return INITIAL_TEMPLATE.format(
+        issue_number=issue.number,
+        issue_title=issue.title,
+        branch_note=branch_note,
+        issue_body=issue.body or "No description provided.",
+        tools_dir=tools_dir,
+    )

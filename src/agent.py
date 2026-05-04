@@ -47,6 +47,13 @@ class Agent:
         self.git = None
         self.claude = None
         self.session_manager = SessionManager(config.session_dir)
+        # Bootstrap python-dev-tools and expose path for prompts
+        from .tools_bootstrap import ensure_tools_installed
+        agent_root = Path(__file__).resolve().parent.parent
+        try:
+            self.config.tools_dir = ensure_tools_installed(agent_root)
+        except RuntimeError as e:
+            log.warning(f"Tools bootstrap failed: {e}. Prompts will reference relative 'tools/'.")
         # Round-robin state: track which repo was checked last
         self._last_repo_index = -1
 
@@ -551,7 +558,8 @@ class Agent:
             Formatted prompt string
         """
         from .prompt_template import build_prompt
-        return build_prompt(issue, state)
+        tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
+        return build_prompt(issue, state=state, tools_dir=tools_dir)
 
     def process_issue(self, issue) -> IssueResult:
         """
