@@ -7,6 +7,7 @@ runtime deps (openai, python-dotenv) that semantic_search.py needs.
 """
 
 import logging
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,11 @@ def ensure_tools_installed(install_dir: Path = DEFAULT_INSTALL_DIR) -> ToolsInst
         return existing
 
     log.info(f"Installing python-dev-tools via {INSTALL_SCRIPT_URL}...")
+    if not shutil.which("curl"):
+        raise RuntimeError(
+            f"curl is required to install python-dev-tools but was not found. "
+            f"Install curl, then retry. Manual fix: curl -sSL {INSTALL_SCRIPT_URL} | bash"
+        )
     # We pipe the script through bash. `set -e -o pipefail` is set inside the
     # script itself; here we capture combined output to surface failures.
     result = subprocess.run(

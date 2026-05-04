@@ -112,6 +112,19 @@ class TestEnsureToolsInstalled:
             ensure_tools_installed(install_dir=install)
         assert "tools missing" in str(exc_info.value).lower()
 
+    def test_raises_when_curl_missing(self, tmp_path, monkeypatch):
+        """If curl isn't installed, raise a clear error before invoking bash."""
+        from src.tools_bootstrap import ensure_tools_installed
+
+        install = tmp_path / ".cap-tools"
+        # No tools present → ensure_tools_installed will try to invoke installer.
+
+        monkeypatch.setattr("src.tools_bootstrap.shutil.which", lambda _: None)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            ensure_tools_installed(install_dir=install)
+        assert "curl" in str(exc_info.value).lower()
+
 
 def _ok():
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")

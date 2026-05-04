@@ -184,6 +184,7 @@ class Agent:
             # When stacked PRs disabled, always use the main working branch (dev or main)
             return self.git.get_working_branch()
 
+        working_branch = self.git.get_working_branch()
         # Find the most recent agent PR (sorted by created date, newest first)
         try:
             prs = list(self.github.repo.get_pulls(
