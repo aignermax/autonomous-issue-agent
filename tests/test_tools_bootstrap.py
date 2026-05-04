@@ -1,130 +1,117 @@
-"""Tests for tools bootstrap (auto-install of python-dev-tools)."""
+"""Tests for tools bootstrap (install via official install.sh)."""
 
+import subprocess
 from pathlib import Path
+
 import pytest
 
-from src.tools_bootstrap import find_tools_dir, REQUIRED_TOOLS, TOOLS_REPO_URL
+from src.tools_bootstrap import (
+    REQUIRED_TOOLS,
+    INSTALL_SCRIPT_URL,
+    ToolsInstall,
+    find_tools_install,
+    ensure_tools_installed,
+)
 
 
-class TestFindToolsDir:
-    """Test detection of tools directory."""
+def _populate(install_dir: Path, with_venv: bool = True) -> None:
+    """Helper: create a fake install dir with all required tools and a fake venv."""
+    install_dir.mkdir(parents=True, exist_ok=True)
+    for tool in REQUIRED_TOOLS:
+        (install_dir / tool).write_text("")
+    if with_venv:
+        venv_bin = install_dir / "venv" / "bin"
+        venv_bin.mkdir(parents=True, exist_ok=True)
+        (venv_bin / "python3").write_text("#!/bin/bash\n")
+        (venv_bin / "python3").chmod(0o755)
 
-    def test_detects_submodule_tools_dir(self, tmp_path):
-        """When tools/ submodule exists with all required tools, return it."""
-        tools = tmp_path / "tools"
-        tools.mkdir()
-        for tool in REQUIRED_TOOLS:
-            (tools / tool).write_text("#!/usr/bin/env python3\n")
 
-        result = find_tools_dir(agent_root=tmp_path)
-        assert result == tools.resolve()
+class TestFindToolsInstall:
+    def test_returns_install_with_venv_python_when_present(self, tmp_path):
+        install = tmp_path / ".cap-tools"
+        _populate(install, with_venv=True)
+        result = find_tools_install(install_dir=install)
+        assert result is not None
+        assert result.dir == install.resolve()
+        assert result.python == install / "venv" / "bin" / "python3"
 
-    def test_returns_none_when_tools_missing(self, tmp_path):
-        """When required tools are missing, return None."""
-        tools = tmp_path / "tools"
-        tools.mkdir()
-        # Only one of several required tools present
-        (tools / "semantic_search.py").write_text("")
-
-        result = find_tools_dir(agent_root=tmp_path)
-        assert result is None
+    def test_falls_back_to_system_python_when_venv_missing(self, tmp_path):
+        install = tmp_path / ".cap-tools"
+        _populate(install, with_venv=False)
+        result = find_tools_install(install_dir=install)
+        assert result is not None
+        assert result.python == Path("python3")
 
     def test_returns_none_when_dir_missing(self, tmp_path):
-        """When tools/ dir doesn't exist, return None."""
-        result = find_tools_dir(agent_root=tmp_path)
+        result = find_tools_install(install_dir=tmp_path / "nope")
+        assert result is None
+
+    def test_returns_none_when_a_tool_is_missing(self, tmp_path):
+        install = tmp_path / ".cap-tools"
+        install.mkdir()
+        (install / "semantic_search.py").write_text("")  # only one of five
+        result = find_tools_install(install_dir=install)
         assert result is None
 
 
 class TestEnsureToolsInstalled:
-    """Test bootstrap that initializes submodule or clones tools repo."""
-
-    def test_returns_path_when_already_present(self, tmp_path, monkeypatch):
-        """If tools already complete, no install action needed."""
-        from src.tools_bootstrap import ensure_tools_installed
-
-        tools = tmp_path / "tools"
-        tools.mkdir()
-        for tool in REQUIRED_TOOLS:
-            (tools / tool).write_text("")
+    def test_returns_install_when_already_present(self, tmp_path, monkeypatch):
+        install = tmp_path / ".cap-tools"
+        _populate(install, with_venv=True)
 
         called = []
-        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", lambda *a, **kw: called.append(a) or _ok())
+        monkeypatch.setattr(
+            "src.tools_bootstrap.subprocess.run",
+            lambda *a, **kw: called.append(a) or _ok(),
+        )
 
-        result = ensure_tools_installed(agent_root=tmp_path)
+        result = ensure_tools_installed(install_dir=install)
+        assert result.dir == install.resolve()
+        assert called == [], "should not invoke installer if tools present"
 
-        assert result == tools.resolve()
-        assert called == [], "should not invoke subprocess when tools already present"
-
-    def test_initializes_submodule_when_dir_empty(self, tmp_path, monkeypatch):
-        """If tools/ exists empty (uninit submodule), run submodule update."""
-        from src.tools_bootstrap import ensure_tools_installed
-
-        (tmp_path / "tools").mkdir()
-        (tmp_path / ".gitmodules").write_text("[submodule \"tools\"]\n")
-
+    def test_invokes_install_script_when_missing(self, tmp_path, monkeypatch):
+        install = tmp_path / ".cap-tools"
         run_calls = []
 
         def fake_run(cmd, **kw):
             run_calls.append(cmd)
-            # After "submodule update", populate the dir
-            if "submodule" in cmd:
-                for tool in REQUIRED_TOOLS:
-                    (tmp_path / "tools" / tool).write_text("")
+            # After the install script runs, simulate it populating the dir.
+            _populate(install, with_venv=True)
             return _ok()
 
         monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
+        result = ensure_tools_installed(install_dir=install)
 
-        result = ensure_tools_installed(agent_root=tmp_path)
+        assert result.dir == install.resolve()
+        assert any("curl" in " ".join(c) and INSTALL_SCRIPT_URL in " ".join(c)
+                   for c in run_calls), "expected curl + install URL in invoked command"
 
-        assert result == (tmp_path / "tools").resolve()
-        assert any("submodule" in c for c in run_calls)
-
-    def test_clones_when_no_submodule_and_no_dir(self, tmp_path, monkeypatch):
-        """If no submodule config and no tools/, clone repo into tools/."""
-        from src.tools_bootstrap import ensure_tools_installed
-
-        run_calls = []
+    def test_raises_when_installer_returns_nonzero(self, tmp_path, monkeypatch):
+        install = tmp_path / ".cap-tools"
 
         def fake_run(cmd, **kw):
-            run_calls.append(cmd)
-            if "clone" in cmd:
-                tools = tmp_path / "tools"
-                tools.mkdir()
-                for tool in REQUIRED_TOOLS:
-                    (tools / tool).write_text("")
-            return _ok()
-
-        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
-
-        result = ensure_tools_installed(agent_root=tmp_path)
-
-        assert result == (tmp_path / "tools").resolve()
-        assert any("clone" in c and TOOLS_REPO_URL in c for c in run_calls)
-
-
-    def test_raises_when_submodule_update_fails(self, tmp_path, monkeypatch):
-        """If submodule update returns non-zero, raise RuntimeError with stderr."""
-        from src.tools_bootstrap import ensure_tools_installed
-
-        (tmp_path / "tools").mkdir()
-        (tmp_path / ".gitmodules").write_text("[submodule \"tools\"]\n")
-
-        def fake_run(cmd, **kw):
-            import subprocess
             return subprocess.CompletedProcess(
-                args=cmd, returncode=1, stdout="", stderr="fatal: no SSH key",
+                args=cmd, returncode=1, stdout="", stderr="permission denied",
             )
 
         monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
-
         with pytest.raises(RuntimeError) as exc_info:
-            ensure_tools_installed(agent_root=tmp_path)
+            ensure_tools_installed(install_dir=install)
+        assert "install.sh failed" in str(exc_info.value)
+        assert "permission denied" in str(exc_info.value)
 
-        assert "submodule" in str(exc_info.value).lower()
-        assert "fatal: no SSH key" in str(exc_info.value)
+    def test_raises_when_tools_missing_after_install(self, tmp_path, monkeypatch):
+        install = tmp_path / ".cap-tools"
+
+        def fake_run(cmd, **kw):
+            # Returns success but does NOT populate install dir.
+            return _ok()
+
+        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
+        with pytest.raises(RuntimeError) as exc_info:
+            ensure_tools_installed(install_dir=install)
+        assert "tools missing" in str(exc_info.value).lower()
 
 
 def _ok():
-    """Helper: minimal CompletedProcess stand-in."""
-    import subprocess
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")

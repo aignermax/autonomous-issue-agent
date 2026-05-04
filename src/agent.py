@@ -49,9 +49,10 @@ class Agent:
         self.claude = None
         self.session_manager = SessionManager(config.session_dir)
         # Bootstrap python-dev-tools and expose path for prompts
-        agent_root = Path(__file__).resolve().parent.parent
         try:
-            self.config.tools_dir = ensure_tools_installed(agent_root)
+            install = ensure_tools_installed()
+            self.config.tools_dir = install.dir
+            self.config.tools_python = install.python
         except RuntimeError as e:
             log.warning(f"Tools bootstrap failed: {e}. Prompts will reference relative 'tools/'.")
         # Round-robin state: track which repo was checked last
@@ -72,13 +73,13 @@ class Agent:
         tool_counts = {}
 
         # Count semantic_search.py usage
-        semantic_pattern = r'python3\s+(?:\S+/)?tools/semantic_search\.py'
+        semantic_pattern = r'\S*python\S*\s+\S*(?:tools|\.cap-tools)/semantic_search\.py'
         semantic_matches = re.findall(semantic_pattern, output)
         if semantic_matches:
             tool_counts['semantic_search'] = len(semantic_matches)
 
         # Count smart_test.py usage
-        smart_test_pattern = r'python3\s+(?:\S+/)?tools/smart_test\.py'
+        smart_test_pattern = r'\S*python\S*\s+\S*(?:tools|\.cap-tools)/smart_test\.py'
         smart_test_matches = re.findall(smart_test_pattern, output)
         if smart_test_matches:
             tool_counts['smart_test'] = len(smart_test_matches)
@@ -559,7 +560,8 @@ class Agent:
         """
         from .prompt_template import build_prompt
         tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
-        return build_prompt(issue, state=state, tools_dir=tools_dir)
+        tools_python = str(self.config.tools_python) if self.config.tools_python else "python3"
+        return build_prompt(issue, state=state, tools_dir=tools_dir, tools_python=tools_python)
 
     def process_issue(self, issue) -> IssueResult:
         """

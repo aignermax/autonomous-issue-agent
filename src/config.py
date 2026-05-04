@@ -36,8 +36,9 @@ class Config:
 
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
 
-        # Tools directory (auto-detected via tools_bootstrap; lazy init in Agent)
+        # Tools install (auto-detected via tools_bootstrap; lazy init in Agent)
         self.tools_dir: Optional[Path] = None
+        self.tools_python: Optional[Path] = None
 
         # Resource limits based on complexity
         # Regular tasks (agent-task only): Simple fixes, docs, small features

@@ -1,12 +1,14 @@
 """Auto-install and detection of python-dev-tools.
 
-The agent uses helper tools (semantic_search.py, smart_test.py, etc.) that live in
-a separate repository. This module ensures they are present on disk and exposes
-their absolute path for use in prompt templates.
+We rely on the official upstream installer at
+https://github.com/aignermax/python-dev-tools/blob/main/install.sh which
+populates ~/.cap-tools/ with all 5 tools and a venv containing the
+runtime deps (openai, python-dotenv) that semantic_search.py needs.
 """
 
 import logging
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -20,75 +22,66 @@ REQUIRED_TOOLS = (
     "dotnet_deps.py",
 )
 
-TOOLS_REPO_URL = "https://github.com/aignermax/python-dev-tools.git"
+DEFAULT_INSTALL_DIR = Path.home() / ".cap-tools"
+INSTALL_SCRIPT_URL = (
+    "https://raw.githubusercontent.com/aignermax/python-dev-tools/main/install.sh"
+)
 
 
-def find_tools_dir(agent_root: Path) -> Optional[Path]:
-    """Return path to tools dir if all REQUIRED_TOOLS are present, else None.
+@dataclass(frozen=True)
+class ToolsInstall:
+    """Path information returned to the agent for prompt rendering."""
+    dir: Path     # absolute path to the tools directory (e.g. ~/.cap-tools)
+    python: Path  # absolute path to the python interpreter to invoke tools with
 
-    Args:
-        agent_root: Root of the agent installation (parent of `src/`).
 
-    Returns:
-        Absolute path to tools dir, or None if missing/incomplete.
+def find_tools_install(install_dir: Path = DEFAULT_INSTALL_DIR) -> Optional[ToolsInstall]:
+    """Return ToolsInstall if all REQUIRED_TOOLS exist in install_dir, else None.
+
+    Prefers the venv python at install_dir/venv/bin/python3. Falls back to
+    the system python3 only if the venv is missing (degraded but functional
+    for tools that do not need openai).
     """
-    candidate = agent_root / "tools"
-    if not candidate.is_dir():
+    if not install_dir.is_dir():
         return None
     for tool in REQUIRED_TOOLS:
-        if not (candidate / tool).is_file():
+        if not (install_dir / tool).is_file():
             return None
-    return candidate.resolve()
+    venv_python = install_dir / "venv" / "bin" / "python3"
+    python_path = venv_python if venv_python.is_file() else Path("python3")
+    return ToolsInstall(dir=install_dir.resolve(), python=python_path)
 
 
-def ensure_tools_installed(agent_root: Path) -> Path:
-    """Ensure python-dev-tools are installed, return absolute path.
-
-    Strategy:
-    1. If all required tools already present in <agent_root>/tools/, return path.
-    2. Else if .gitmodules declares the submodule, run `git submodule update --init`.
-    3. Else clone TOOLS_REPO_URL into <agent_root>/tools/.
+def ensure_tools_installed(install_dir: Path = DEFAULT_INSTALL_DIR) -> ToolsInstall:
+    """Install tools via the official installer if absent, then return ToolsInstall.
 
     Raises:
-        RuntimeError: if all strategies fail to make tools available.
+        RuntimeError: if install.sh fails or tools are still missing afterwards.
     """
-    existing = find_tools_dir(agent_root)
+    existing = find_tools_install(install_dir)
     if existing:
-        log.info(f"python-dev-tools present: {existing}")
+        log.info(f"python-dev-tools present: {existing.dir} (python: {existing.python})")
         return existing
 
-    tools_dir = agent_root / "tools"
-    gitmodules = agent_root / ".gitmodules"
-
-    if gitmodules.is_file() and "tools" in gitmodules.read_text():
-        log.info("Initializing python-dev-tools submodule...")
-        result = subprocess.run(
-            ["git", "submodule", "update", "--init", "--recursive", "tools"],
-            cwd=agent_root,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"git submodule update failed (exit {result.returncode}): "
-                f"{result.stderr.strip()}. Manual fix: run "
-                f"`git submodule update --init tools` in {agent_root}"
-            )
-    else:
-        log.info(f"Cloning python-dev-tools from {TOOLS_REPO_URL}...")
-        result = subprocess.run(
-            ["git", "clone", TOOLS_REPO_URL, str(tools_dir)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to clone tools repo: {result.stderr}")
-
-    final = find_tools_dir(agent_root)
-    if not final:
-        missing = [t for t in REQUIRED_TOOLS if not (tools_dir / t).is_file()]
+    log.info(f"Installing python-dev-tools via {INSTALL_SCRIPT_URL}...")
+    # We pipe the script through bash. `set -e -o pipefail` is set inside the
+    # script itself; here we capture combined output to surface failures.
+    result = subprocess.run(
+        ["bash", "-c", f"curl -fsSL {INSTALL_SCRIPT_URL} | bash"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
         raise RuntimeError(
-            f"python-dev-tools install incomplete. Missing: {missing}. "
-            f"Manual fix: clone {TOOLS_REPO_URL} into {tools_dir}"
+            f"python-dev-tools install.sh failed (exit {result.returncode}). "
+            f"stdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}\n"
+            f"Manual fix: curl -sSL {INSTALL_SCRIPT_URL} | bash"
+        )
+
+    final = find_tools_install(install_dir)
+    if not final:
+        missing = [t for t in REQUIRED_TOOLS if not (install_dir / t).is_file()]
+        raise RuntimeError(
+            f"python-dev-tools install completed but tools missing: {missing}. "
+            f"Manual fix: curl -sSL {INSTALL_SCRIPT_URL} | bash"
         )
     return final

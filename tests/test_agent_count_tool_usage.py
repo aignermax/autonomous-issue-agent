@@ -5,6 +5,11 @@ import types
 from unittest.mock import MagicMock
 
 
+def _agent():
+    """Alias used by newer tests."""
+    return _make_agent()
+
+
 def _make_agent():
     """Build a minimal Agent without invoking __init__ and without real deps."""
     # Stub out the github and other heavy deps before importing src.agent
@@ -57,6 +62,17 @@ class TestCountToolUsage:
         output = (
             "python3 tools/semantic_search.py 'q1'\n"
             "python3 tools/smart_test.py\n"
+        )
+        result = agent._count_tool_usage(output)
+        assert result.get("semantic_search") == 1
+        assert result.get("smart_test") == 1
+
+    def test_counts_new_install_format(self):
+        """Regex must match ~/.cap-tools/venv/bin/python3 ~/.cap-tools/<tool>.py."""
+        agent = _agent()
+        output = (
+            "/home/max/.cap-tools/venv/bin/python3 /home/max/.cap-tools/semantic_search.py 'q'\n"
+            "/home/max/.cap-tools/venv/bin/python3 /home/max/.cap-tools/smart_test.py\n"
         )
         result = agent._count_tool_usage(output)
         assert result.get("semantic_search") == 1

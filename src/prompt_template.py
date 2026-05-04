@@ -16,11 +16,11 @@ Branch: {branch_name}{branch_note}
 Continue where you left off:
 1. Check build (use build_errors.py):
    ```bash
-   python3 {tools_dir}/build_errors.py --suggest-fixes
+   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
    ```
 2. Run tests (use smart_test.py):
    ```bash
-   python3 {tools_dir}/smart_test.py
+   {tools_python} {tools_dir}/smart_test.py
    ```
 3. Continue implementing (use semantic_search.py to find examples)
 4. Fix any failures
@@ -56,11 +56,11 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 ## Before Finishing
 1. **Build** (use build analyzer for cleaner output):
    ```bash
-   python3 {tools_dir}/build_errors.py --suggest-fixes
+   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
    ```
 2. **Test** (use smart test tool):
    ```bash
-   python3 {tools_dir}/smart_test.py
+   {tools_python} {tools_dir}/smart_test.py
    ```
 3. Fix all errors/warnings
 4. **Keep trying until it works**
@@ -74,7 +74,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 1. Read `CLAUDE.md` for architecture + `CODEBASE_MAP.md` for overview
 2. **ALWAYS use semantic search first** (better than glob/grep):
    ```bash
-   python3 {tools_dir}/semantic_search.py "your natural language query"
+   {tools_python} {tools_dir}/semantic_search.py "your natural language query"
    ```
    Examples: "ViewModel for analysis", "test files for bounding box", "where is GDS export?"
 3. Find similar features to reuse patterns
@@ -83,7 +83,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
    - TESTS/BUGFIXES → Tests or fix only (NO UI)
 5. **ALWAYS use smart test tool** (NOT `dotnet test` directly):
    ```bash
-   python3 {tools_dir}/smart_test.py [filter]
+   {tools_python} {tools_dir}/smart_test.py [filter]
    ```
    Shows clean summary instead of 1000+ test results!
 6. Build/test iteratively, fix errors immediately
@@ -105,14 +105,18 @@ These tools save 500-5000 tokens per use! Use them frequently!
 """
 
 
-def build_prompt(issue, state=None, tools_dir: str = "tools") -> str:
+def build_prompt(issue, state=None, tools_dir: str = "tools",
+                 tools_python: str = "python3") -> str:
     """
     Build the implementation prompt for Claude Code.
 
     Args:
         issue: GitHub Issue object
         state: Optional session state for continuation
-        tools_dir: Absolute path to python-dev-tools directory
+        tools_dir: Absolute path to python-dev-tools install dir
+        tools_python: Path to the python interpreter that has the tools' deps
+                      (e.g. ~/.cap-tools/venv/bin/python3). Defaults to plain
+                      "python3" for backwards compatibility.
 
     Returns:
         Formatted prompt string
@@ -136,6 +140,7 @@ def build_prompt(issue, state=None, tools_dir: str = "tools") -> str:
             branch_note=branch_note,
             recent_notes=recent_notes,
             tools_dir=tools_dir,
+            tools_python=tools_python,
         )
     return INITIAL_TEMPLATE.format(
         issue_number=issue.number,
@@ -143,4 +148,5 @@ def build_prompt(issue, state=None, tools_dir: str = "tools") -> str:
         branch_note=branch_note,
         issue_body=issue.body or "No description provided.",
         tools_dir=tools_dir,
+        tools_python=tools_python,
     )
