@@ -41,10 +41,11 @@ class TestRunReviewLoop:
             instance = MockReviewer.return_value
             instance.review.return_value = ok_result
 
-            agent._run_review_loop(issue=issue, pr=pr, branch="agent/issue-1",
-                                   worktree_path=tmp_path)
+            result = agent._run_review_loop(issue=issue, pr=pr, branch="agent/issue-1",
+                                            worktree_path=tmp_path)
 
             assert instance.review.call_count == 1
+            assert result is False
 
     def test_loop_runs_worker_retry_on_blocking(self, tmp_path):
         agent = self._make_agent(max_review_rounds=2)
@@ -62,12 +63,13 @@ class TestRunReviewLoop:
             worker = MockClaude.return_value
             worker.execute.return_value = ("done", False, MagicMock())
 
-            agent._run_review_loop(issue=issue, pr=pr, branch="agent/issue-1",
-                                   worktree_path=tmp_path)
+            result = agent._run_review_loop(issue=issue, pr=pr, branch="agent/issue-1",
+                                            worktree_path=tmp_path)
 
             assert instance.review.call_count == 2
             assert worker.execute.call_count == 1
             agent.git.commit_and_push.assert_called_once()
+            assert result is False
 
     def test_loop_flags_for_human_on_exhaustion(self, tmp_path):
         agent = self._make_agent(max_review_rounds=2)
@@ -85,9 +87,10 @@ class TestRunReviewLoop:
             worker = MockClaude.return_value
             worker.execute.return_value = ("", False, MagicMock())
 
-            agent._run_review_loop(issue=issue, pr=pr, branch="agent/issue-1",
-                                   worktree_path=tmp_path)
+            result = agent._run_review_loop(issue=issue, pr=pr, branch="agent/issue-1",
+                                            worktree_path=tmp_path)
 
             assert instance.review.call_count == 2
             issue.add_to_labels.assert_called_once_with("needs-human")
             pr.create_issue_comment.assert_called()
+            assert result is True

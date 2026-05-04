@@ -227,7 +227,7 @@ class Agent:
             if state:
                 log.info(f"Deleting session for closed issue #{issue_num}")
                 self.session_manager.delete_state(issue_num)
-            raise IssueResult(success=False, branch="", error=f"Issue is closed")
+            return IssueResult(success=False, branch="", error="Issue is closed")
 
         # Check for existing session
         state = self.session_manager.load_state(issue_num)
@@ -636,7 +636,7 @@ class Agent:
                 if existing:
                     log.info(f"Deleting session for closed issue #{issue_num}")
                     self.session_manager.delete_state(issue_num)
-                raise IssueResult(success=False, branch=branch, error="Issue is closed")
+                return IssueResult(success=False, branch=branch, error="Issue is closed")
 
             state = self.session_manager.load_state(issue_num)
             if state:
@@ -709,11 +709,13 @@ class Agent:
 
             # Step 7b: Run the Reviewer → Worker iteration loop
             pr = self.github.get_pr_by_branch(branch)
+            escalated = False
             if pr is not None:
-                self._run_review_loop(issue, pr, branch, worktree_path)
+                escalated = self._run_review_loop(issue, pr, branch, worktree_path)
 
             # Step 8: Close issue and cleanup
-            self.github.close_issue(issue, pr_url)
+            if not escalated:
+                self.github.close_issue(issue, pr_url)
             state.completed = True
             state.pr_url = pr_url
             state.add_note(f"PR created: {pr_url}")
@@ -729,8 +731,13 @@ class Agent:
         finally:
             self.git.cleanup()
 
-    def _run_review_loop(self, issue, pr, branch: str, worktree_path: Path) -> None:
-        """Iterate Worker → Reviewer up to max_review_rounds; tag if exhausted."""
+    def _run_review_loop(self, issue, pr, branch: str, worktree_path: Path) -> bool:
+        """Iterate Worker → Reviewer up to max_review_rounds; tag if exhausted.
+
+        Returns:
+            True if escalated to human (issue should NOT be closed).
+            False if reviewer approved or loop exited cleanly (issue may be closed).
+        """
         from .prompt_template import build_retry_prompt
 
         reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode)
@@ -747,7 +754,7 @@ class Agent:
             )
             if not result.has_blocking:
                 log.info(f"Reviewer verdict OK on round {round_num} — done")
-                return
+                return False
 
             if round_num == self.config.max_review_rounds:
                 log.warning(
@@ -755,7 +762,7 @@ class Agent:
                     f"flagging PR #{pr.number}"
                 )
                 self._flag_for_human(issue, pr, result)
-                return
+                return True
 
             # Retry: rerun worker with reviewer findings in prompt
             tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
@@ -770,7 +777,11 @@ class Agent:
             max_turns, _, _ = self._detect_issue_complexity(issue)
             worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
             log.info(f"Re-running worker for round {round_num + 1}")
-            worker.execute(retry_prompt)
+            _output, reached_max, _usage = worker.execute(retry_prompt)
+            if reached_max:
+                log.warning(
+                    f"Worker retry reached max turns on round {round_num + 1}"
+                )
 
             # Push any new commits the worker produced.
             self.git.commit_and_push(
@@ -779,19 +790,21 @@ class Agent:
                 base_branch=base_branch,
             )
 
+        return False  # unreachable, but keeps type stable
+
     def _flag_for_human(self, issue, pr, result) -> None:
         """Add `needs-human` label and post escalation comment."""
         try:
             issue.add_to_labels("needs-human")
         except Exception as e:
-            log.warning(f"Could not add needs-human label: {e}")
+            log.error(f"Could not add needs-human label — human will not see escalation: {e}")
         try:
             pr.create_issue_comment(
                 f"Reached max review rounds ({self.config.max_review_rounds}) "
                 f"with BLOCKING findings remaining. Last summary: {result.summary}"
             )
         except Exception as e:
-            log.warning(f"Could not post escalation comment: {e}")
+            log.error(f"Could not post escalation comment: {e}")
 
     def _setup_for_repo(self, repo_name: str) -> None:
         """
