@@ -14,6 +14,7 @@ from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
 from .github_client import GitHubClient
+from .reviewer import Reviewer
 from .session_state import SessionManager, SessionState
 from .tools_bootstrap import ensure_tools_installed
 from .worktree import WorktreeManager
@@ -706,6 +707,11 @@ class Agent:
             # Step 7: Create or find PR
             pr_url = self._create_or_find_pr(issue, state, branch, output)
 
+            # Step 7b: Run the Reviewer → Worker iteration loop
+            pr = self.github.get_pr_by_branch(branch)
+            if pr is not None:
+                self._run_review_loop(issue, pr, branch, worktree_path)
+
             # Step 8: Close issue and cleanup
             self.github.close_issue(issue, pr_url)
             state.completed = True
@@ -722,6 +728,70 @@ class Agent:
             return self._handle_error(issue, state, branch, e)
         finally:
             self.git.cleanup()
+
+    def _run_review_loop(self, issue, pr, branch: str, worktree_path: Path) -> None:
+        """Iterate Worker → Reviewer up to max_review_rounds; tag if exhausted."""
+        from .prompt_template import build_retry_prompt
+
+        reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode)
+        base_branch = self.git.default_branch
+
+        for round_num in range(1, self.config.max_review_rounds + 1):
+            log.info(
+                f"Review round {round_num}/{self.config.max_review_rounds} "
+                f"for PR #{pr.number}"
+            )
+            result = reviewer.review(
+                issue=issue, pr=pr, branch=branch,
+                base_branch=base_branch, worktree_path=worktree_path,
+            )
+            if not result.has_blocking:
+                log.info(f"Reviewer verdict OK on round {round_num} — done")
+                return
+
+            if round_num == self.config.max_review_rounds:
+                log.warning(
+                    f"Max review rounds reached ({self.config.max_review_rounds}); "
+                    f"flagging PR #{pr.number}"
+                )
+                self._flag_for_human(issue, pr, result)
+                return
+
+            # Retry: rerun worker with reviewer findings in prompt
+            tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
+            tools_python = (
+                str(self.config.tools_python)
+                if self.config.tools_python else "python3"
+            )
+            retry_prompt = build_retry_prompt(
+                issue=issue, branch=branch, review=result,
+                tools_dir=tools_dir, tools_python=tools_python,
+            )
+            max_turns, _, _ = self._detect_issue_complexity(issue)
+            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+            log.info(f"Re-running worker for round {round_num + 1}")
+            worker.execute(retry_prompt)
+
+            # Push any new commits the worker produced.
+            self.git.commit_and_push(
+                branch=branch,
+                message=f"Address review feedback (round {round_num + 1})",
+                base_branch=base_branch,
+            )
+
+    def _flag_for_human(self, issue, pr, result) -> None:
+        """Add `needs-human` label and post escalation comment."""
+        try:
+            issue.add_to_labels("needs-human")
+        except Exception as e:
+            log.warning(f"Could not add needs-human label: {e}")
+        try:
+            pr.create_issue_comment(
+                f"Reached max review rounds ({self.config.max_review_rounds}) "
+                f"with BLOCKING findings remaining. Last summary: {result.summary}"
+            )
+        except Exception as e:
+            log.warning(f"Could not post escalation comment: {e}")
 
     def _setup_for_repo(self, repo_name: str) -> None:
         """
