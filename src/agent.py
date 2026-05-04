@@ -72,13 +72,13 @@ class Agent:
         tool_counts = {}
 
         # Count semantic_search.py usage
-        semantic_pattern = r'/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search\.py'
+        semantic_pattern = r'python3\s+\S+/tools/semantic_search\.py'
         semantic_matches = re.findall(semantic_pattern, output)
         if semantic_matches:
             tool_counts['semantic_search'] = len(semantic_matches)
 
         # Count smart_test.py usage
-        smart_test_pattern = r'/home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test\.py'
+        smart_test_pattern = r'python3\s+\S+/tools/smart_test\.py'
         smart_test_matches = re.findall(smart_test_pattern, output)
         if smart_test_matches:
             tool_counts['smart_test'] = len(smart_test_matches)
