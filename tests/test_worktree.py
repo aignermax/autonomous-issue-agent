@@ -79,3 +79,30 @@ class TestWorktreeManager:
         branches = {wt.branch for wt in wts}
         assert "agent/issue-4" in branches
         assert "agent/issue-5" in branches
+
+    def test_create_distinguishes_branches_with_slashes_vs_underscores(self, repo, tmp_path):
+        """`feat/foo` and `feat_foo` must not collide."""
+        wt_root = tmp_path / "worktrees"
+        mgr = WorktreeManager(worktree_root=wt_root)
+
+        p1 = mgr.create(repo_path=repo, branch="feat/foo", base="main")
+        p2 = mgr.create(repo_path=repo, branch="feat_foo", base="main")
+
+        assert p1 != p2
+        assert p1.is_dir() and p2.is_dir()
+
+    def test_list_marks_detached_head(self, repo, tmp_path):
+        """A detached-HEAD worktree should be listed with branch='(detached)'."""
+        import subprocess
+        wt_root = tmp_path / "worktrees"
+        mgr = WorktreeManager(worktree_root=wt_root)
+
+        # Create a worktree, then detach HEAD inside it
+        path = mgr.create(repo_path=repo, branch="feat/detach-me", base="main")
+        subprocess.run(["git", "checkout", "--detach"], cwd=path, check=True,
+                       capture_output=True)
+
+        wts = mgr.list(repo_path=repo)
+        detached = [w for w in wts if w.path.resolve() == path.resolve()]
+        assert len(detached) == 1
+        assert detached[0].branch == "(detached)"

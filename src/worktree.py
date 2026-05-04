@@ -7,6 +7,7 @@ contamination between runs.
 
 import logging
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,9 +37,14 @@ class WorktreeManager:
         self.worktree_root.mkdir(parents=True, exist_ok=True)
 
     def _path_for(self, repo_path: Path, branch: str) -> Path:
+        """Layout: <root>/<repo-name>/<branch-as-nested-path>/
+
+        Using nested directories per slash-separated branch component avoids
+        collisions where `feat/foo` and `feat_foo` would otherwise share a path.
+        """
         repo_name = repo_path.resolve().name
-        safe = branch.replace("/", "_")
-        return self.worktree_root / repo_name / safe
+        parts = branch.split("/")
+        return self.worktree_root.joinpath(repo_name, *parts)
 
     def create(self, repo_path: Path, branch: str, base: str) -> Path:
         """Create a worktree for `branch` derived from `base`.
@@ -77,26 +83,53 @@ class WorktreeManager:
         return target
 
     def remove(self, repo_path: Path, branch: str) -> None:
-        """Remove a worktree by branch. Does not delete the branch itself."""
+        """Remove a worktree by branch. Does not delete the branch itself.
+
+        Strategy: prefer `git worktree remove --force`. If that fails (e.g.
+        files locked on Windows), fall back to filesystem removal followed
+        by `git worktree prune`. Both fallback failures are logged loudly
+        so they don't hide a degraded state.
+        """
         target = self._path_for(repo_path, branch)
         if not target.exists():
             log.info(f"Worktree already gone: {target}")
             return
-        result = subprocess.run(
+
+        primary = subprocess.run(
             ["git", "worktree", "remove", "--force", str(target)],
             cwd=repo_path, capture_output=True, text=True,
         )
-        if result.returncode != 0:
-            log.warning(f"git worktree remove failed, falling back to manual delete: {result.stderr}")
-            import shutil
-            shutil.rmtree(target, ignore_errors=True)
-            subprocess.run(
-                ["git", "worktree", "prune"],
-                cwd=repo_path, capture_output=True, text=True,
+        if primary.returncode == 0:
+            return
+
+        log.warning(
+            "git worktree remove --force failed (exit %s): %s. "
+            "Falling back to manual cleanup.",
+            primary.returncode, primary.stderr.strip(),
+        )
+
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            log.error(f"Manual rmtree of {target} also failed: {exc}")
+
+        prune = subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if prune.returncode != 0:
+            log.error(
+                "git worktree prune failed after manual cleanup (exit %s): %s. "
+                "Worktree may still be registered in git internals.",
+                prune.returncode, prune.stderr.strip(),
             )
 
     def list(self, repo_path: Path) -> List[WorktreeInfo]:
-        """List all worktrees registered in `repo_path`."""
+        """List worktrees registered under `repo_path` (excluding the main checkout).
+
+        Detached HEAD entries are surfaced with branch="(detached)" so callers
+        can distinguish them from on-branch worktrees.
+        """
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
             cwd=repo_path, capture_output=True, text=True,
@@ -106,24 +139,29 @@ class WorktreeManager:
 
         worktrees: List[WorktreeInfo] = []
         current: dict = {}
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                if current.get("worktree"):
-                    worktrees.append(WorktreeInfo(
-                        path=Path(current["worktree"]),
-                        branch=current.get("branch", "").replace("refs/heads/", ""),
-                        head=current.get("HEAD", ""),
-                    ))
-                current = {}
-                continue
-            m = re.match(r"^(\S+)\s*(.*)$", line)
-            if m:
-                current[m.group(1)] = m.group(2)
-        if current.get("worktree"):
+
+        def flush() -> None:
+            if not current.get("worktree"):
+                return
+            branch = current.get("branch", "").replace("refs/heads/", "")
+            if not branch and "detached" in current:
+                branch = "(detached)"
             worktrees.append(WorktreeInfo(
                 path=Path(current["worktree"]),
-                branch=current.get("branch", "").replace("refs/heads/", ""),
+                branch=branch,
                 head=current.get("HEAD", ""),
             ))
-        # Drop the main checkout (no branch ref or first entry)
+
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                flush()
+                current = {}
+                continue
+            m = re.match(r"^(\S+)\s*(.*)$", stripped)
+            if m:
+                current[m.group(1)] = m.group(2)
+        flush()
+
+        # Drop the main checkout from the result.
         return [w for w in worktrees if w.path.resolve() != repo_path.resolve()]
