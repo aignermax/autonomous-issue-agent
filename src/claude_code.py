@@ -100,16 +100,18 @@ def find_claude_cli() -> str:
 class ClaudeCode:
     """Runs Claude Code CLI in headless mode."""
 
-    def __init__(self, working_dir: Path, max_turns: int = 300):
+    def __init__(self, working_dir: Path, max_turns: int = 300, model: Optional[str] = None):
         """
         Initialize Claude Code runner.
 
         Args:
             working_dir: Directory where Claude Code should execute
             max_turns: Maximum number of tool call turns
+            model: Optional model override (e.g. "claude-opus-4-7"). None = CLI default.
         """
         self.working_dir = working_dir
         self.max_turns = max_turns
+        self.model = model
         self.claude_cli = find_claude_cli()
         self._verify_installation()
 
@@ -155,6 +157,9 @@ class ClaudeCode:
             "--dangerously-skip-permissions",
             "--debug", "api"  # Enable API debug logging to capture all token usage
         ]
+
+        if self.model:
+            cmd.extend(["--model", self.model])
 
         # Add resume flag if continuing from previous session
         if resume_file and resume_file.exists():
