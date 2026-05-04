@@ -16,6 +16,7 @@ from .claude_code import ClaudeCode
 from .github_client import GitHubClient
 from .session_state import SessionManager, SessionState
 from .tools_bootstrap import ensure_tools_installed
+from .worktree import WorktreeManager
 
 log = logging.getLogger("agent")
 
@@ -48,6 +49,7 @@ class Agent:
         self.git = None
         self.claude = None
         self.session_manager = SessionManager(config.session_dir)
+        self.worktrees = WorktreeManager(worktree_root=config.worktree_dir)
         # Bootstrap python-dev-tools and expose path for prompts
         try:
             install = ensure_tools_installed()
@@ -564,31 +566,91 @@ class Agent:
         return build_prompt(issue, state=state, tools_dir=tools_dir, tools_python=tools_python)
 
     def process_issue(self, issue) -> IssueResult:
-        """
-        Process an issue with multi-session support.
+        """Process one issue, isolated in its own git worktree."""
+        # Determine the branch early so we can create the worktree before
+        # diving into the full pipeline.  For a resumed session the branch is
+        # stored in the existing session state; for a new session we claim the
+        # issue now and derive a fresh branch name.
+        issue_num = issue.number
+        existing_state = self.session_manager.load_state(issue_num)
+        if existing_state:
+            branch = existing_state.branch_name
+        else:
+            branch = self._claim_issue_and_create_branch(issue)
 
-        This is the main orchestrator that delegates to smaller, focused methods.
+        worktree_path = self.worktrees.create(
+            repo_path=self.config.local_path,
+            branch=branch,
+            base=self.git.get_working_branch(),
+        )
+        log.info(f"Using worktree: {worktree_path}")
+
+        max_turns, _, _ = self._detect_issue_complexity(issue)
+        worktree_git = GitRepo(
+            path=worktree_path,
+            remote_url=self.git.remote_url,
+            default_branch=self.git.default_branch,
+        )
+        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+
+        original_git, original_claude = self.git, self.claude
+        self.git, self.claude = worktree_git, worktree_claude
+        try:
+            return self._process_issue_in_worktree(issue, branch, worktree_path)
+        finally:
+            self.git, self.claude = original_git, original_claude
+
+    def _process_issue_in_worktree(self, issue, branch: str, worktree_path: Path) -> IssueResult:
+        """
+        Process an issue with multi-session support, running inside a worktree.
+
+        This contains the full pipeline previously in process_issue, minus the
+        initial branch-claim step (which is handled by the caller via
+        _claim_issue_and_create_branch).
 
         Args:
             issue: GitHub Issue object
+            branch: Branch name already claimed/created by process_issue
+            worktree_path: Path to the isolated worktree
 
         Returns:
             IssueResult with outcome
         """
         issue_num = issue.number
         state = None
-        branch = None
 
         try:
             # Step 0: Detect issue complexity and set appropriate limits
             max_turns, max_tokens, complexity = self._detect_issue_complexity(issue)
             self.config.max_turns = max_turns
             self.config.max_tokens_per_issue = max_tokens
-            # Reinitialize ClaudeCode with new turn limit
-            self.claude = ClaudeCode(self.git.path, max_turns)
 
-            # Step 1: Validate issue and setup/resume session
-            state, branch = self._validate_and_setup_session(issue)
+            # Step 1: Load or create session state.
+            # The branch was already claimed by process_issue — do NOT call
+            # _claim_issue_and_create_branch or _validate_and_setup_session
+            # again here, as that would double-post comments and double-remove labels.
+            if issue.state != "open":
+                log.warning(f"Issue #{issue_num} is closed (state: {issue.state})")
+                existing = self.session_manager.load_state(issue_num)
+                if existing:
+                    log.info(f"Deleting session for closed issue #{issue_num}")
+                    self.session_manager.delete_state(issue_num)
+                raise IssueResult(success=False, branch=branch, error="Issue is closed")
+
+            state = self.session_manager.load_state(issue_num)
+            if state:
+                # Resume existing session
+                log.info(f"Resuming session for issue #{issue_num} (session {state.session_count + 1})")
+                branch = state.branch_name
+                try:
+                    issue.remove_from_labels(self.config.issue_label)
+                    log.info(f"Removed '{self.config.issue_label}' label from resumed issue #{issue_num}")
+                except Exception as e:
+                    log.warning(f"Could not remove label from issue #{issue_num}: {e}")
+            else:
+                # New session — state wasn't created yet; create it now
+                state = self.session_manager.create_state(issue_num, branch)
+                log.info(f"Starting new session for issue #{issue_num}")
 
             # Step 2: Prepare branch (checkout or create)
             self._prepare_branch(branch)
@@ -975,6 +1037,24 @@ class Agent:
         except Exception as e:
             log.error(f"Failed to update base branch: {e}")
             return False
+
+    def cleanup_merged_worktrees(self) -> None:
+        """Remove worktrees for branches whose PRs are closed or merged.
+
+        For each configured repo, sets up the GitHubClient + git checkout,
+        lists all worktrees registered under the main checkout, and for each
+        agent-prefixed branch checks whether an open PR exists. If no open PR
+        is found, the worktree is removed (the branch is preserved).
+        """
+        for repo_name in self.config.repo_names:
+            self._setup_for_repo(repo_name)
+            for wt in self.worktrees.list(self.config.local_path):
+                if not wt.branch.startswith(self.config.branch_prefix):
+                    continue
+                pr = self.github.get_pr_by_branch(wt.branch)
+                if pr is None:
+                    log.info(f"No open PR for {wt.branch} — removing worktree")
+                    self.worktrees.remove(self.config.local_path, wt.branch)
 
     def run_forever(self) -> None:
         """Poll loop — runs until killed."""

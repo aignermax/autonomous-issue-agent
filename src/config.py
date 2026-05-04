@@ -63,6 +63,11 @@ class Config:
         # Ensure session directory exists
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
+        # Worktree base directory (one subdir per repo+branch)
+        self.worktree_dir: Path = Path(
+            os.environ.get("AGENT_WORKTREE_DIR", "~/.aia-worktrees")
+        ).expanduser()
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of missing variables."""
         missing = []

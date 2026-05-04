@@ -49,6 +49,8 @@ def main():
     parser = argparse.ArgumentParser(description="Autonomous Issue Agent")
     parser.add_argument("--once", nargs='?', const=True, type=int,
                         help="Run once and exit (optionally specify issue number)")
+    parser.add_argument("--cleanup-worktrees", action="store_true",
+                        help="Remove worktrees for closed/merged PRs and exit")
     args = parser.parse_args()
 
     # Warn if running inside Claude Code session
@@ -102,6 +104,10 @@ def main():
 
     # Initialize agent
     agent = Agent(config)
+
+    if args.cleanup_worktrees:
+        agent.cleanup_merged_worktrees()
+        sys.exit(0)
 
     # Run mode
     if args.once is not None:

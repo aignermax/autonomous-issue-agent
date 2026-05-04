@@ -94,3 +94,16 @@ class TestConfig:
 
         assert session_dir.exists()
         assert session_dir.is_dir()
+
+    def test_worktree_dir_default(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        config = Config()
+        assert str(config.worktree_dir).endswith(".aia-worktrees")
+
+    def test_worktree_dir_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("AGENT_WORKTREE_DIR", str(tmp_path / "wt"))
+        config = Config()
+        assert config.worktree_dir == tmp_path / "wt"
