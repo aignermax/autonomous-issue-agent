@@ -75,6 +75,13 @@ class TestConfig:
 
         assert len(missing) == 0
 
+    def test_tools_dir_default_none(self, monkeypatch):
+        """tools_dir starts as None and is populated lazily."""
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        config = Config()
+        assert config.tools_dir is None
+
     def test_session_dir_created(self, tmp_path, monkeypatch):
         """Test that session directory is created."""
         session_dir = tmp_path / "test_sessions"
