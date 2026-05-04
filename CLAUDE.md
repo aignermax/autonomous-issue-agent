@@ -1,8 +1,15 @@
-# Agent Instructions for Connect-A-PIC-Pro
+# Agent Instructions for Lunima
 
-**NOTE:** This is an example `CLAUDE.md` file configured for **Connect-A-PIC-Pro** (C# / Avalonia / MVVM project).
+**NOTE:** This is an example `CLAUDE.md` file configured for **Lunima** (formerly
+Connect-A-PIC-Pro; C# / Avalonia / MVVM project).
 
 If you're using the Autonomous Issue Agent for a different project, adapt this file to your tech stack, architecture patterns, and coding standards.
+
+> **Tool paths:** This document references `<TOOLS_PYTHON>` (path to a python with
+> openai/python-dotenv installed) and `<TOOLS_DIR>` (where the python-dev-tools
+> live). The Autonomous Issue Agent auto-installs them via the upstream
+> install.sh into `~/.cap-tools/` and substitutes the real paths into prompts
+> at runtime; for human readers, mentally substitute these placeholders.
 
 ---
 
