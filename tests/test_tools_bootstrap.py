@@ -17,7 +17,7 @@ class TestFindToolsDir:
             (tools / tool).write_text("#!/usr/bin/env python3\n")
 
         result = find_tools_dir(agent_root=tmp_path)
-        assert result == tools
+        assert result == tools.resolve()
 
     def test_returns_none_when_tools_missing(self, tmp_path):
         """When required tools are missing, return None."""
@@ -48,7 +48,7 @@ class TestEnsureToolsInstalled:
             (tools / tool).write_text("")
 
         called = []
-        monkeypatch.setattr("subprocess.run", lambda *a, **kw: called.append(a) or _ok())
+        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", lambda *a, **kw: called.append(a) or _ok())
 
         result = ensure_tools_installed(agent_root=tmp_path)
 
@@ -72,7 +72,7 @@ class TestEnsureToolsInstalled:
                     (tmp_path / "tools" / tool).write_text("")
             return _ok()
 
-        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
 
         result = ensure_tools_installed(agent_root=tmp_path)
 
@@ -94,12 +94,34 @@ class TestEnsureToolsInstalled:
                     (tools / tool).write_text("")
             return _ok()
 
-        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
 
         result = ensure_tools_installed(agent_root=tmp_path)
 
         assert result == (tmp_path / "tools").resolve()
         assert any("clone" in c and TOOLS_REPO_URL in c for c in run_calls)
+
+
+    def test_raises_when_submodule_update_fails(self, tmp_path, monkeypatch):
+        """If submodule update returns non-zero, raise RuntimeError with stderr."""
+        from src.tools_bootstrap import ensure_tools_installed
+
+        (tmp_path / "tools").mkdir()
+        (tmp_path / ".gitmodules").write_text("[submodule \"tools\"]\n")
+
+        def fake_run(cmd, **kw):
+            import subprocess
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=1, stdout="", stderr="fatal: no SSH key",
+            )
+
+        monkeypatch.setattr("src.tools_bootstrap.subprocess.run", fake_run)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            ensure_tools_installed(agent_root=tmp_path)
+
+        assert "submodule" in str(exc_info.value).lower()
+        assert "fatal: no SSH key" in str(exc_info.value)
 
 
 def _ok():

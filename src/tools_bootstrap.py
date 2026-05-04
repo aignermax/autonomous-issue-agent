@@ -69,7 +69,11 @@ def ensure_tools_installed(agent_root: Path) -> Path:
             text=True,
         )
         if result.returncode != 0:
-            log.warning(f"submodule update failed: {result.stderr}")
+            raise RuntimeError(
+                f"git submodule update failed (exit {result.returncode}): "
+                f"{result.stderr.strip()}. Manual fix: run "
+                f"`git submodule update --init tools` in {agent_root}"
+            )
     else:
         log.info(f"Cloning python-dev-tools from {TOOLS_REPO_URL}...")
         result = subprocess.run(
