@@ -15,6 +15,7 @@ from .git_repo import GitRepo
 from .claude_code import ClaudeCode
 from .github_client import GitHubClient
 from .session_state import SessionManager, SessionState
+from .tools_bootstrap import ensure_tools_installed
 
 log = logging.getLogger("agent")
 
@@ -48,7 +49,6 @@ class Agent:
         self.claude = None
         self.session_manager = SessionManager(config.session_dir)
         # Bootstrap python-dev-tools and expose path for prompts
-        from .tools_bootstrap import ensure_tools_installed
         agent_root = Path(__file__).resolve().parent.parent
         try:
             self.config.tools_dir = ensure_tools_installed(agent_root)
@@ -72,13 +72,13 @@ class Agent:
         tool_counts = {}
 
         # Count semantic_search.py usage
-        semantic_pattern = r'python3\s+\S+/tools/semantic_search\.py'
+        semantic_pattern = r'python3\s+(?:\S+/)?tools/semantic_search\.py'
         semantic_matches = re.findall(semantic_pattern, output)
         if semantic_matches:
             tool_counts['semantic_search'] = len(semantic_matches)
 
         # Count smart_test.py usage
-        smart_test_pattern = r'python3\s+\S+/tools/smart_test\.py'
+        smart_test_pattern = r'python3\s+(?:\S+/)?tools/smart_test\.py'
         smart_test_matches = re.findall(smart_test_pattern, output)
         if smart_test_matches:
             tool_counts['smart_test'] = len(smart_test_matches)

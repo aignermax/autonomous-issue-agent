@@ -50,3 +50,14 @@ class TestCountToolUsage:
         agent = _make_agent()
         result = agent._count_tool_usage("nothing relevant here")
         assert result == {}
+
+    def test_counts_relative_tools_path(self):
+        """Regex must also match the fallback `python3 tools/...` (no leading slash)."""
+        agent = _make_agent()
+        output = (
+            "python3 tools/semantic_search.py 'q1'\n"
+            "python3 tools/smart_test.py\n"
+        )
+        result = agent._count_tool_usage(output)
+        assert result.get("semantic_search") == 1
+        assert result.get("smart_test") == 1
