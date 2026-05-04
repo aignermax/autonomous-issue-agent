@@ -107,3 +107,22 @@ class TestConfig:
         monkeypatch.setenv("AGENT_WORKTREE_DIR", str(tmp_path / "wt"))
         config = Config()
         assert config.worktree_dir == tmp_path / "wt"
+
+    def test_reviewer_defaults(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        c = Config()
+        assert c.max_review_rounds == 2
+        assert c.reviewer_model_default == "claude-sonnet-4-6"
+        assert c.reviewer_model_critical == "claude-opus-4-7"
+        assert c.critical_label == "critical"
+        assert c.reviewer_max_turns == 50
+
+    def test_reviewer_overrides(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("AGENT_MAX_REVIEW_ROUNDS", "4")
+        monkeypatch.setenv("AGENT_REVIEWER_MODEL", "x")
+        c = Config()
+        assert c.max_review_rounds == 4
+        assert c.reviewer_model_default == "x"

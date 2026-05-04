@@ -40,6 +40,15 @@ class Config:
         self.tools_dir: Optional[Path] = None
         self.tools_python: Optional[Path] = None
 
+        # Reviewer settings
+        self.max_review_rounds: int = int(os.environ.get("AGENT_MAX_REVIEW_ROUNDS", "2"))
+        self.reviewer_model_default: str = os.environ.get(
+            "AGENT_REVIEWER_MODEL", "claude-sonnet-4-6")
+        self.reviewer_model_critical: str = os.environ.get(
+            "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-7")
+        self.critical_label: str = os.environ.get("AGENT_CRITICAL_LABEL", "critical")
+        self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "50"))
+
         # Resource limits based on complexity
         # Regular tasks (agent-task only): Simple fixes, docs, small features
         self.max_turns_regular: int = int(os.environ.get("AGENT_MAX_TURNS_REGULAR", "150"))
