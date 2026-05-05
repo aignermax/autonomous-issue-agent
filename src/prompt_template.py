@@ -16,11 +16,11 @@ Branch: {branch_name}{branch_note}
 Continue where you left off:
 1. Check build (use build_errors.py):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/build_errors.py --suggest-fixes
+   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
    ```
 2. Run tests (use smart_test.py):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
+   {tools_python} {tools_dir}/smart_test.py
    ```
 3. Continue implementing (use semantic_search.py to find examples)
 4. Fix any failures
@@ -56,11 +56,11 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 ## Before Finishing
 1. **Build** (use build analyzer for cleaner output):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/build_errors.py --suggest-fixes
+   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
    ```
 2. **Test** (use smart test tool):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py
+   {tools_python} {tools_dir}/smart_test.py
    ```
 3. Fix all errors/warnings
 4. **Keep trying until it works**
@@ -74,7 +74,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
 1. Read `CLAUDE.md` for architecture + `CODEBASE_MAP.md` for overview
 2. **ALWAYS use semantic search first** (better than glob/grep):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/semantic_search.py "your natural language query"
+   {tools_python} {tools_dir}/semantic_search.py "your natural language query"
    ```
    Examples: "ViewModel for analysis", "test files for bounding box", "where is GDS export?"
 3. Find similar features to reuse patterns
@@ -83,7 +83,7 @@ Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
    - TESTS/BUGFIXES → Tests or fix only (NO UI)
 5. **ALWAYS use smart test tool** (NOT `dotnet test` directly):
    ```bash
-   /home/aigner/connect-a-pic-agent/venv/bin/python3 /home/aigner/connect-a-pic-agent/tools/smart_test.py [filter]
+   {tools_python} {tools_dir}/smart_test.py [filter]
    ```
    Shows clean summary instead of 1000+ test results!
 6. Build/test iteratively, fix errors immediately
@@ -114,19 +114,24 @@ These tools save 500-5000 tokens per use! Use them frequently!
 """
 
 
-def build_prompt(issue, state=None, repo_name=None) -> str:
+def build_prompt(issue, state=None, repo_name=None, tools_dir: str = "tools",
+                 tools_python: str = "python3") -> str:
     """
     Build the implementation prompt for Claude Code.
 
     Args:
         issue: GitHub Issue object
         state: Optional session state for continuation
-        repo_name: Current repository name (e.g., "Akhetonics/akhetonics-desktop")
+        repo_name: Current repository name (e.g., "Akhetonics/akhetonics-desktop");
+                   triggers workspace-aware notes when set.
+        tools_dir: Absolute path to python-dev-tools install dir
+        tools_python: Path to the python interpreter that has the tools' deps
+                      (e.g. ~/.cap-tools/venv/bin/python3). Defaults to plain
+                      "python3" for backwards compatibility.
 
     Returns:
         Formatted prompt string
     """
-    # Determine if working on existing feature branch
     is_feature_branch = state and not state.branch_name.startswith("agent/issue-")
     branch_note = (
         f"\n**IMPORTANT:** You are working on existing branch: `{state.branch_name}`\n"
@@ -154,7 +159,6 @@ def build_prompt(issue, state=None, repo_name=None) -> str:
 """
 
     if state and state.session_count > 0:
-        # Continuation prompt
         recent_notes = "\n".join(state.notes[-5:]) if state.notes else "No notes yet."
         return CONTINUATION_TEMPLATE.format(
             issue_number=issue.number,
@@ -163,13 +167,122 @@ def build_prompt(issue, state=None, repo_name=None) -> str:
             total_turns=state.total_turns_used,
             branch_name=state.branch_name,
             branch_note=branch_note,
-            recent_notes=recent_notes
+            recent_notes=recent_notes,
+            tools_dir=tools_dir,
+            tools_python=tools_python,
         ) + workspace_note
-    else:
-        # Initial prompt
-        return INITIAL_TEMPLATE.format(
-            issue_number=issue.number,
-            issue_title=issue.title,
-            branch_note=branch_note,
-            issue_body=issue.body or "No description provided."
-        ) + workspace_note
+    return INITIAL_TEMPLATE.format(
+        issue_number=issue.number,
+        issue_title=issue.title,
+        branch_note=branch_note,
+        issue_body=issue.body or "No description provided.",
+        tools_dir=tools_dir,
+        tools_python=tools_python,
+    ) + workspace_note
+
+
+REVIEWER_TEMPLATE = """You are a senior code reviewer. Review PR #{pr_number} for issue #{issue_number}.
+
+## Issue
+**Title:** {issue_title}
+
+{issue_body}
+
+## Your Job
+1. Read CLAUDE.md and AGENTS.md (if present) for project conventions.
+2. Inspect the PR diff:
+   ```bash
+   git fetch origin {branch}
+   git diff origin/{base_branch}..origin/{branch}
+   ```
+3. For deeper inspection, use:
+   ```bash
+   {tools_python} {tools_dir}/semantic_search.py "your query"
+   {tools_python} {tools_dir}/find_symbol.py SymbolName
+   ```
+4. Verify (in this order):
+   - Does the diff actually solve the issue's acceptance criteria?
+   - Are there obvious correctness bugs (off-by-one, null deref, unhandled error paths)?
+   - Tests: do they exist for new logic? Do they assert real behaviour, not just call shape?
+   - Architecture: does it follow CLAUDE.md? Hard rules violated?
+   - Security: any input validation gaps, secret logging, path traversal?
+
+## Output Format — STRICT
+
+End your review with EXACTLY this block (parsed by tooling):
+
+```
+=== REVIEW RESULT ===
+VERDICT: <OK | BLOCKING>
+SUMMARY: <one sentence>
+=== FINDINGS ===
+- [SEVERITY] <file:line> — <issue> — <suggested fix>
+- [SEVERITY] <file:line> — <issue> — <suggested fix>
+=== END ===
+```
+
+Severity levels: BLOCKING (must fix), NIT (suggestion). Use BLOCKING only for real
+correctness/security/spec issues — not style.
+
+If verdict is OK, the FINDINGS list may be empty.
+
+DO NOT modify any files. DO NOT commit. Read-only review."""
+
+
+def build_reviewer_prompt(issue, pr, branch: str, base_branch: str,
+                          tools_dir: str, tools_python: str = "python3") -> str:
+    """Build the reviewer prompt for a given PR."""
+    return REVIEWER_TEMPLATE.format(
+        pr_number=pr.number,
+        issue_number=issue.number,
+        issue_title=issue.title,
+        issue_body=issue.body or "No description provided.",
+        branch=branch,
+        base_branch=base_branch,
+        tools_dir=tools_dir,
+        tools_python=tools_python,
+    )
+
+
+WORKER_RETRY_TEMPLATE = """Reviewer found issues on your PR for issue #{issue_number}.
+
+## Reviewer Verdict: BLOCKING
+{review_summary}
+
+## Reviewer Findings
+{findings_text}
+
+## Your Task
+
+Address every BLOCKING finding above. NIT findings are optional but
+appreciated. Use the same tools as before:
+- `{tools_python} {tools_dir}/semantic_search.py "..."` to locate code
+- `{tools_python} {tools_dir}/build_errors.py --suggest-fixes` for build issues
+- `{tools_python} {tools_dir}/smart_test.py` to run tests
+
+After fixing, commit and push to the same branch (`{branch}`). The reviewer
+will re-run automatically.
+
+## Original Issue
+{issue_title}
+
+{issue_body}
+"""
+
+
+def build_retry_prompt(issue, branch: str, review, tools_dir: str,
+                       tools_python: str = "python3") -> str:
+    """Build a worker retry prompt that includes reviewer findings."""
+    findings_text = "\n".join(
+        f"- [{f.severity}] {f.text}" for f in review.findings
+    ) or "(no specific findings; verdict was BLOCKING — see summary)"
+    return WORKER_RETRY_TEMPLATE.format(
+        issue_number=issue.number,
+        issue_title=issue.title,
+        issue_body=issue.body or "No description provided.",
+        review_summary=review.summary,
+        findings_text=findings_text,
+        branch=branch,
+        tools_dir=tools_dir,
+        tools_python=tools_python,
+    )

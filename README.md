@@ -67,6 +67,49 @@ GitHub Issues (label: agent-task) across multiple repos
 
 **Multi-Repository Support:** The agent can monitor multiple repositories simultaneously. Configure with `AGENT_REPOS=owner/repo1,owner/repo2` in `.env`. The agent processes issues in order across all configured repositories.
 
+## Multi-Role Pipeline (Worker + Reviewer)
+
+Each issue runs through a Worker → Reviewer loop in an isolated git worktree:
+
+```
+GitHub Issue (label: agent-task)
+       │
+       ▼
+[Worktree] git worktree add ~/.aia-worktrees/<repo>/<branch>/
+       │
+       ▼
+[Worker]   Claude Code (sonnet/opus) → commit + push → open PR
+       │
+       ▼
+[Reviewer] Claude Code (sonnet, opus for `critical` label)
+           reads diff, posts structured PR comment
+       │
+   verdict?
+       │
+   ┌───┴────┐
+   │        │
+   OK    BLOCKING
+   │        │
+   │   round < max?  ──yes──► [Worker] retry with findings
+   │        │ no
+   │        ▼
+   │   add label `needs-human`, escalate
+   │
+   ▼
+PR ready for human merge
+```
+
+**Configuration:** see `.env.example` for `AGENT_MAX_REVIEW_ROUNDS`,
+`AGENT_REVIEWER_MODEL`, `AGENT_CRITICAL_LABEL`, `AGENT_WORKTREE_DIR`.
+
+**Cleanup:** `python main.py --cleanup-worktrees` removes worktrees for
+branches without an open PR.
+
+**Tools:** the agent auto-installs `python-dev-tools` into `~/.cap-tools/`
+on first run (via the upstream `install.sh`), including a venv with the
+runtime dependencies (`openai`, `python-dotenv`) that `semantic_search.py`
+needs. Override the install location is not currently exposed.
+
 ## Why Claude Code over raw API?
 
 | Raw API approach                    | Claude Code (this agent)            |

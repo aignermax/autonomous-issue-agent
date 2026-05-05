@@ -75,6 +75,14 @@ class TestConfig:
 
         assert len(missing) == 0
 
+    def test_tools_dir_default_none(self, monkeypatch):
+        """tools_dir and tools_python start as None, populated lazily."""
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        config = Config()
+        assert config.tools_dir is None
+        assert config.tools_python is None
+
     def test_session_dir_created(self, tmp_path, monkeypatch):
         """Test that session directory is created."""
         session_dir = tmp_path / "test_sessions"
@@ -86,3 +94,35 @@ class TestConfig:
 
         assert session_dir.exists()
         assert session_dir.is_dir()
+
+    def test_worktree_dir_default(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        config = Config()
+        assert str(config.worktree_dir).endswith(".aia-worktrees")
+
+    def test_worktree_dir_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("AGENT_WORKTREE_DIR", str(tmp_path / "wt"))
+        config = Config()
+        assert config.worktree_dir == tmp_path / "wt"
+
+    def test_reviewer_defaults(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        c = Config()
+        assert c.max_review_rounds == 2
+        assert c.reviewer_model_default == "claude-sonnet-4-6"
+        assert c.reviewer_model_critical == "claude-opus-4-7"
+        assert c.critical_label == "critical"
+        assert c.reviewer_max_turns == 50
+
+    def test_reviewer_overrides(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("AGENT_MAX_REVIEW_ROUNDS", "4")
+        monkeypatch.setenv("AGENT_REVIEWER_MODEL", "x")
+        c = Config()
+        assert c.max_review_rounds == 4
+        assert c.reviewer_model_default == "x"

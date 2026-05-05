@@ -36,6 +36,19 @@ class Config:
 
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
 
+        # Tools install (auto-detected via tools_bootstrap; lazy init in Agent)
+        self.tools_dir: Optional[Path] = None
+        self.tools_python: Optional[Path] = None
+
+        # Reviewer settings
+        self.max_review_rounds: int = int(os.environ.get("AGENT_MAX_REVIEW_ROUNDS", "2"))
+        self.reviewer_model_default: str = os.environ.get(
+            "AGENT_REVIEWER_MODEL", "claude-sonnet-4-6")
+        self.reviewer_model_critical: str = os.environ.get(
+            "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-7")
+        self.critical_label: str = os.environ.get("AGENT_CRITICAL_LABEL", "critical")
+        self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "50"))
+
         # Resource limits based on complexity
         # Regular tasks (agent-task only): Simple fixes, docs, small features
         self.max_turns_regular: int = int(os.environ.get("AGENT_MAX_TURNS_REGULAR", "150"))
@@ -58,6 +71,11 @@ class Config:
 
         # Ensure session directory exists
         self.session_dir.mkdir(parents=True, exist_ok=True)
+
+        # Worktree base directory (one subdir per repo+branch)
+        self.worktree_dir: Path = Path(
+            os.environ.get("AGENT_WORKTREE_DIR", "~/.aia-worktrees")
+        ).expanduser()
 
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of missing variables."""
