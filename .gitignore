@@ -44,3 +44,14 @@ Thumbs.db
 # Temporary/build artifacts that shouldn't be committed
 *.tar.gz
 RELEASE_*.md
+
+# Build / test output captured to files (e.g. `dotnet build > build_stdout.txt`)
+*_stdout.txt
+*_stderr.txt
+profiler_build.txt
+
+# dotnet bootstrap script and any numbered backups
+dotnet-install.sh*
+
+# MCP servers cloned at runtime — see README "MCP Servers" section
+mcp-servers/
