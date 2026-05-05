@@ -22,6 +22,7 @@ load_dotenv(override=True)
 
 from src.config import Config
 from src.agent import Agent
+from src.agents.qa_agent import QAAgent
 
 
 # ==============================
@@ -49,8 +50,10 @@ def main():
     parser = argparse.ArgumentParser(description="Autonomous Issue Agent")
     parser.add_argument("--once", nargs='?', const=True, type=int,
                         help="Run once and exit (optionally specify issue number)")
+    parser.add_argument("--role", choices=["coder", "qa"], default="coder",
+                        help="Which agent role to run (default: coder)")
     parser.add_argument("--cleanup-worktrees", action="store_true",
-                        help="Remove worktrees for closed/merged PRs and exit")
+                        help="Remove worktrees for closed/merged PRs and exit (coder role only)")
     args = parser.parse_args()
 
     # Warn if running inside Claude Code session
@@ -102,24 +105,36 @@ def main():
         log.error("❌ git not found - required for agent operation!")
         sys.exit(1)
 
-    # Initialize agent
-    agent = Agent(config)
-
-    if args.cleanup_worktrees:
-        agent.cleanup_merged_worktrees()
-        sys.exit(0)
-
-    # Run mode
-    if args.once is not None:
-        if isinstance(args.once, int):
-            log.info(f"Running in single-issue mode for issue #{args.once}")
-            agent.run_single_issue(args.once)
-        else:
+    # Initialize agent for the requested role
+    if args.role == "qa":
+        if args.cleanup_worktrees:
+            log.error("--cleanup-worktrees is only valid for the coder role")
+            sys.exit(2)
+        log.info("Starting in QA role — verifying PRs created by the coder agent")
+        agent = QAAgent(config)
+        if args.once is not None:
+            if isinstance(args.once, int):
+                log.warning("--once <issue_number> is not supported for the qa role; running a single cycle instead")
             log.info("Running in single-iteration mode")
             agent.run_once()
+        else:
+            log.info("Running in continuous polling mode")
+            agent.run_forever()
     else:
-        log.info("Running in continuous polling mode")
-        agent.run_forever()
+        agent = Agent(config)
+        if args.cleanup_worktrees:
+            agent.cleanup_merged_worktrees()
+            sys.exit(0)
+        if args.once is not None:
+            if isinstance(args.once, int):
+                log.info(f"Running in single-issue mode for issue #{args.once}")
+                agent.run_single_issue(args.once)
+            else:
+                log.info("Running in single-iteration mode")
+                agent.run_once()
+        else:
+            log.info("Running in continuous polling mode")
+            agent.run_forever()
 
 
 if __name__ == "__main__":
