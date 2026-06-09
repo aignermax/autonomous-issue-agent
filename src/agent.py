@@ -33,6 +33,7 @@ class IssueResult:
     pr_url: str = ""
     error: str = ""
     needs_continuation: bool = False
+    lost_claim_race: bool = False
 
 
 class Agent:
@@ -258,21 +259,33 @@ class Agent:
         return state, branch
 
     def _claim_won(self, issue) -> bool:
-        """Return True if this agent won the claim race for the issue.
+        """Post this agent's claim marker and return whether it won the race.
 
-        Winner is the earliest claim marker (lowest server comment id). A None
-        winner (marker mechanism unavailable) is treated as won, because a
-        permanently unprocessed issue is worse than a rare duplicate.
+        The winner is the earliest claim marker (lowest server comment id). If
+        this agent cannot post its own marker, it backs off (returns False) — it
+        cannot prove it won. If the marker posts but no winner can be determined
+        (claim_winner returns None: no markers visible yet due to API replication
+        lag, or comments unreadable), it is treated as won, because a permanently
+        unprocessed issue is worse than a rare duplicate run.
         """
+        try:
+            self.github.post_claim(issue, self.agent_id)
+            log.info(f"Posted claim for issue #{issue.number} as {self.agent_id}")
+        except Exception as e:
+            log.error(
+                f"Could not post claim marker for issue #{issue.number}: {e}; "
+                f"backing off to avoid an unverified duplicate run"
+            )
+            return False
         winner = self.github.claim_winner(issue)
         if winner is None or winner == self.agent_id:
             return True
-        log.info(f"Lost claim race for issue #{issue.number} to {winner}; backing off")
+        log.warning(f"Lost claim race for issue #{issue.number} to {winner}; backing off")
         return False
 
     def _claim_issue_and_create_branch(self, issue) -> str:
         """
-        Claim an issue by removing label, assigning to bot user, and determine branch name.
+        Claim an issue by removing the activation label and assigning it to the repository owner (a human-visible lock), and determine the branch name. The claim marker and race verification are handled by _claim_won.
 
         Args:
             issue: GitHub Issue object
@@ -282,26 +295,21 @@ class Agent:
         """
         issue_num = issue.number
 
-        # LOCK the issue: remove the activation label, assign for a human-visible
-        # lock, and post a claim marker (the authoritative race tiebreak).
+        # Remove the activation label so the issue leaves the polling queue.
         try:
             log.info(f"Claiming issue #{issue_num} by removing '{self.config.issue_label}' label")
             issue.remove_from_labels(self.config.issue_label)
             log.info(f"Issue #{issue_num} locked (label removed)")
-
-            # Assign to the repo owner as a persistent, human-visible lock.
-            # Idempotent across agents; the claim marker resolves who actually won.
-            try:
-                issue.add_to_assignees(self.github.repo.owner.login)
-                log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login}")
-            except Exception as assign_error:
-                log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
-
-            self.github.post_claim(issue, self.agent_id)
-            log.info(f"Posted claim for issue #{issue_num} as {self.agent_id}")
         except Exception as e:
-            log.warning(f"Could not claim issue #{issue_num}: {e}")
-            log.warning("Continuing anyway, but other agents might pick this up too")
+            log.warning(f"Could not remove label from issue #{issue_num}: {e}")
+
+        # Assign to the repo owner as a persistent, human-visible lock (idempotent
+        # across agents; the claim marker, posted by _claim_won, is the real tiebreak).
+        try:
+            issue.add_to_assignees(self.github.repo.owner.login)
+            log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login}")
+        except Exception as assign_error:
+            log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
 
         # Determine branch name
         target_branch = self._extract_branch_from_issue(issue)
@@ -556,8 +564,8 @@ class Agent:
                     f"Last error: `{str(error)[:300]}`\n\n"
                     f"Please investigate manually."
                 )
-            except:
-                pass
+            except Exception as comment_error:
+                log.warning(f"Could not post failure comment on issue #{issue_num}: {comment_error}")
 
         return IssueResult(success=False, branch=branch, error=str(error))
 
@@ -595,12 +603,15 @@ class Agent:
             branch = existing_state.branch_name
         else:
             branch = self._claim_issue_and_create_branch(issue)
-            # Atomic-claim verify: only the winner of the claim race proceeds.
+            # Atomic-claim verify: only the winner proceeds. A None winner
+            # (no markers / read error) is treated as won to avoid permanently
+            # skipping an issue; see _claim_won.
             if not self._claim_won(issue):
                 return IssueResult(
                     success=False,
                     branch=branch,
                     error="Lost claim race to another agent",
+                    lost_claim_race=True,
                 )
 
         worktree_path = self.worktrees.create(
@@ -941,7 +952,10 @@ class Agent:
                 continue
 
             # Failed without continuation
-            log.error(f"Issue #{issue.number} failed: {result.error}")
+            if result.lost_claim_race:
+                log.info(f"Issue #{issue.number}: another agent claimed it; backing off.")
+            else:
+                log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
         # Done processing (or no issue found)
@@ -984,7 +998,10 @@ class Agent:
                 continue
 
             # Failed without continuation
-            log.error(f"Issue #{issue.number} failed: {result.error}")
+            if result.lost_claim_race:
+                log.info(f"Issue #{issue.number}: another agent claimed it; backing off.")
+            else:
+                log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
     def restart_current_issue(self) -> bool:

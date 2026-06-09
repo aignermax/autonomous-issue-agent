@@ -371,3 +371,12 @@ class TestClaimMarker:
             MagicMock(id=10, body="<!-- AIA-CLAIM: host:spaced -->"),
         ]
         assert client.claim_winner(issue) == "host:spaced"
+
+    def test_claim_winner_handles_none_body_comment(self):
+        client = self._client()
+        issue = MagicMock()
+        issue.get_comments.return_value = [
+            MagicMock(id=10, body=None),
+            MagicMock(id=20, body="<!-- AIA-CLAIM:host:valid -->"),
+        ]
+        assert client.claim_winner(issue) == "host:valid"
