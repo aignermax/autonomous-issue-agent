@@ -126,6 +126,22 @@ rare duplicate; this degrades to today's non-atomic "just process it" behavior.
 - `Agent._claim_won`: mocked github → returns True when winner == own id,
   True when winner is None (fail-safe), False when winner is another id.
 
+## Known limitations
+
+- **Stale claim markers on manual retry after a crash.** Claim markers are never
+  deleted. The normal failure-retry path is safe because session state persists
+  and short-circuits re-claiming (a resumed session skips the claim entirely).
+  But if a winning agent crashes *before* its session state is written and a
+  human then re-adds the activation label, the next agent posts a second marker;
+  `claim_winner` returns the earliest (dead agent's) id, so every living agent
+  loses and the issue becomes unprocessable until the stale marker comment is
+  removed by hand. Mitigation (future work, out of scope here): prune stale
+  markers on re-claim, or add a marker TTL / liveness check.
+- **API replication lag.** `claim_winner` reads comments immediately after
+  posting; GitHub eventual consistency can briefly hide a concurrently-posted
+  marker. The `None`-means-won fail-safe means the worst case is the same
+  duplicate-run outcome as the pre-atomic system — never a stall.
+
 ## Scope estimate
 
 - `src/agent.py`: `agent_id` field, `_claim_won` helper, `post_claim` call
