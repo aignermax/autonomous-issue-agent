@@ -314,3 +314,60 @@ class TestGitHubClientErrorHandling:
                 state="open",
                 head="aignermax:agent/issue-319-1774683470"
             )
+
+
+class TestClaimMarker:
+    def _client(self):
+        # Bypass __init__ (which needs a token + network); these methods
+        # operate on the passed-in issue, not on client state.
+        return GitHubClient.__new__(GitHubClient)
+
+    def test_post_claim_posts_marker_comment(self):
+        client = self._client()
+        issue = MagicMock()
+        client.post_claim(issue, "host:abcd1234")
+        issue.create_comment.assert_called_once()
+        body = issue.create_comment.call_args[0][0]
+        assert "<!-- AIA-CLAIM:host:abcd1234 -->" in body
+
+    def test_claim_winner_returns_lowest_id_marker(self):
+        client = self._client()
+        issue = MagicMock()
+        issue.get_comments.return_value = [
+            MagicMock(id=200, body="just a normal comment"),
+            MagicMock(id=150, body="hi\n<!-- AIA-CLAIM:host:aaaaaaaa -->"),
+            MagicMock(id=140, body="<!-- AIA-CLAIM:host:bbbbbbbb -->\nworking"),
+        ]
+        assert client.claim_winner(issue) == "host:bbbbbbbb"
+
+    def test_claim_winner_none_when_no_markers(self):
+        client = self._client()
+        issue = MagicMock()
+        issue.get_comments.return_value = [
+            MagicMock(id=1, body="nothing here"),
+            MagicMock(id=2, body="still nothing"),
+        ]
+        assert client.claim_winner(issue) is None
+
+    def test_claim_winner_ignores_non_marker_comments(self):
+        client = self._client()
+        issue = MagicMock()
+        issue.get_comments.return_value = [
+            MagicMock(id=5, body="<!-- AIA-CLAIM:host:only -->"),
+            MagicMock(id=3, body="unrelated lower-id comment"),
+        ]
+        assert client.claim_winner(issue) == "host:only"
+
+    def test_claim_winner_none_on_github_error(self):
+        client = self._client()
+        issue = MagicMock()
+        issue.get_comments.side_effect = Exception("api down")
+        assert client.claim_winner(issue) is None
+
+    def test_claim_winner_tolerates_spaced_marker(self):
+        client = self._client()
+        issue = MagicMock()
+        issue.get_comments.return_value = [
+            MagicMock(id=10, body="<!-- AIA-CLAIM: host:spaced -->"),
+        ]
+        assert client.claim_winner(issue) == "host:spaced"
