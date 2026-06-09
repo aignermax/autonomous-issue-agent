@@ -1,7 +1,8 @@
 """Tests for TestGate."""
 
+import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.test_gate import TestGate
 
@@ -51,3 +52,46 @@ class TestResolveCommand:
         else:
             # POSIX parsing strips backslashes; just assert it splits into 2 tokens
             assert len(parts) == 2
+
+
+class TestRun:
+    def test_skipped_returns_none_and_no_subprocess(self, tmp_path):
+        gate = TestGate(_config(tmp_path))  # no cmd, no smart_test → unavailable
+        with patch("src.test_gate.subprocess.run") as run:
+            assert gate.run(tmp_path) is None
+            run.assert_not_called()
+
+    def test_exit_zero_is_ok(self, tmp_path):
+        gate = TestGate(_config(tmp_path, test_cmd="pytest"))
+        with patch("src.test_gate.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="all passed")
+            result = gate.run(tmp_path)
+        assert result.verdict == "OK"
+        assert result.has_blocking is False
+
+    def test_nonzero_is_blocking_with_output_tail(self, tmp_path):
+        gate = TestGate(_config(tmp_path, test_cmd="pytest"))
+        with patch("src.test_gate.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=1, stdout="FAILED test_foo",
+                                         stderr="traceback XYZ")
+            result = gate.run(tmp_path)
+        assert result.has_blocking is True
+        assert len(result.findings) == 1
+        assert "FAILED test_foo" in result.findings[0].text
+        assert "traceback XYZ" in result.findings[0].text
+
+    def test_timeout_is_blocking(self, tmp_path):
+        gate = TestGate(_config(tmp_path, test_cmd="pytest", timeout=1))
+        with patch("src.test_gate.subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(cmd="pytest", timeout=1)):
+            result = gate.run(tmp_path)
+        assert result.has_blocking is True
+        assert "timed out" in result.summary.lower()
+
+    def test_launch_failure_is_blocking(self, tmp_path):
+        gate = TestGate(_config(tmp_path, test_cmd="nope-xyz"))
+        with patch("src.test_gate.subprocess.run",
+                   side_effect=FileNotFoundError("not found")):
+            result = gate.run(tmp_path)
+        assert result.has_blocking is True
+        assert "could not be launched" in result.summary.lower()

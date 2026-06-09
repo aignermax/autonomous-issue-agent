@@ -55,3 +55,60 @@ class TestGate:
     def is_available(self) -> bool:
         """True if a test command can be resolved."""
         return self._resolve_command() is not None
+
+    def run(self, worktree_path: Path) -> Optional[ReviewResult]:
+        """Run the test command in worktree_path.
+
+        Returns:
+            None if the gate is unavailable/disabled (skipped),
+            ReviewResult(OK) on exit 0,
+            ReviewResult(BLOCKING) on non-zero exit, timeout, or launch failure.
+        """
+        cmd = self._resolve_command()
+        if cmd is None:
+            log.info("Test gate skipped: no test command available")
+            return None
+
+        log.info(f"Test gate running: {' '.join(cmd)} (cwd={worktree_path})")
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=self.config.test_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning(f"Test gate timed out after {self.config.test_timeout}s")
+            return ReviewResult(
+                verdict="BLOCKING",
+                summary=f"Test command timed out after {self.config.test_timeout}s.",
+                findings=[Finding(
+                    severity="BLOCKING",
+                    text=f"Command `{' '.join(cmd)}` did not finish within {self.config.test_timeout}s.",
+                )],
+            )
+        except (FileNotFoundError, OSError) as exc:
+            log.error(f"Test gate command could not be launched: {exc}")
+            return ReviewResult(
+                verdict="BLOCKING",
+                summary="Test command could not be launched.",
+                findings=[Finding(severity="BLOCKING", text=str(exc))],
+            )
+
+        if result.returncode == 0:
+            log.info("Test gate: PASS")
+            return ReviewResult(verdict="OK", summary="Tests passed.")
+
+        combined = (result.stdout or "") + (result.stderr or "")
+        tail = combined[-_OUTPUT_TAIL_CHARS:]
+        log.warning(f"Test gate: FAIL (exit {result.returncode})")
+        return ReviewResult(
+            verdict="BLOCKING",
+            summary=f"Test command failed (exit {result.returncode}).",
+            findings=[Finding(
+                severity="BLOCKING",
+                text=f"Test command exited {result.returncode}. Output tail:\n{tail}",
+            )],
+            raw_output=combined,
+        )
