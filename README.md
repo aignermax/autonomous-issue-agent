@@ -241,6 +241,9 @@ AGENT_MAX_TOKENS_REGULAR=8000000                  # Max tokens for regular tasks
 
 AGENT_MAX_TURNS_COMPLEX=500                       # Max turns for complex tasks (default: 500)
 AGENT_MAX_TOKENS_COMPLEX=15000000                 # Max tokens for complex tasks: 15M ≈ €45-75
+AGENT_TEST_GATE=true                              # Run a deterministic test gate before review (default: true)
+AGENT_TEST_CMD=                                   # Override test command (default: smart_test.py from tools)
+AGENT_TEST_TIMEOUT=1800                           # Test gate timeout in seconds (default: 1800 = 30 min)
 
 # Optional: Semantic Search (requires OpenAI for embeddings)
 # OPENAI_API_KEY=sk-...                           # Only needed for semantic_search.py tool
