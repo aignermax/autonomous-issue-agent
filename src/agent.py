@@ -16,6 +16,7 @@ from .claude_code import ClaudeCode
 from .github_client import GitHubClient
 from .reviewer import Reviewer
 from .session_state import SessionManager, SessionState
+from .test_gate import TestGate
 from .tools_bootstrap import ensure_tools_installed
 from .worktree import WorktreeManager
 
@@ -742,13 +743,14 @@ class Agent:
     def _run_review_loop(self, issue, pr, branch: str, worktree_path: Path) -> bool:
         """Iterate Worker → Reviewer up to max_review_rounds; tag if exhausted.
 
-        Returns:
-            True if escalated to human (issue should NOT be closed).
-            False if reviewer approved or loop exited cleanly (issue may be closed).
+        Each round runs the deterministic test gate first. If tests are red, the
+        LLM reviewer is skipped for that round and the failure is sent straight
+        to the worker. Returns True if escalated to a human.
         """
         from .prompt_template import build_retry_prompt
 
         reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode)
+        gate = TestGate(self.config)
         base_branch = self.git.default_branch
 
         for round_num in range(1, self.config.max_review_rounds + 1):
@@ -756,30 +758,39 @@ class Agent:
                 f"Review round {round_num}/{self.config.max_review_rounds} "
                 f"for PR #{pr.number}"
             )
-            result = reviewer.review(
-                issue=issue, pr=pr, branch=branch,
-                base_branch=base_branch, worktree_path=worktree_path,
-            )
-            if not result.has_blocking:
-                log.info(f"Reviewer verdict OK on round {round_num} — done")
-                return False
+
+            gate_result = gate.run(worktree_path)
+            if gate_result is not None and gate_result.has_blocking:
+                log.warning(f"Test gate BLOCKING on round {round_num}")
+                blocking = gate_result
+                if round_num < self.config.max_review_rounds:
+                    self._post_gate_comment(pr, gate_result)
+            else:
+                result = reviewer.review(
+                    issue=issue, pr=pr, branch=branch,
+                    base_branch=base_branch, worktree_path=worktree_path,
+                )
+                if not result.has_blocking:
+                    log.info(f"Reviewer verdict OK on round {round_num} — done")
+                    return False
+                blocking = result
 
             if round_num == self.config.max_review_rounds:
                 log.warning(
                     f"Max review rounds reached ({self.config.max_review_rounds}); "
                     f"flagging PR #{pr.number}"
                 )
-                self._flag_for_human(issue, pr, result)
+                self._flag_for_human(issue, pr, blocking)
                 return True
 
-            # Retry: rerun worker with reviewer findings in prompt
+            # Retry: rerun worker with blocking findings in prompt
             tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
             tools_python = (
                 str(self.config.tools_python)
                 if self.config.tools_python else "python3"
             )
             retry_prompt = build_retry_prompt(
-                issue=issue, branch=branch, review=result,
+                issue=issue, branch=branch, review=blocking,
                 tools_dir=tools_dir, tools_python=tools_python,
             )
             max_turns, _, _ = self._detect_issue_complexity(issue)
@@ -799,6 +810,15 @@ class Agent:
             )
 
         return False  # unreachable, but keeps type stable
+
+    def _post_gate_comment(self, pr, result) -> None:
+        """Post a short comment on the PR explaining a test-gate block."""
+        try:
+            pr.create_issue_comment(
+                f"## Automated Test Gate — **BLOCKING**\n\n{result.summary}"
+            )
+        except Exception as e:
+            log.warning(f"Could not post test-gate comment on PR #{pr.number}: {e}")
 
     def _flag_for_human(self, issue, pr, result) -> None:
         """Add `needs-human` label and post escalation comment."""
