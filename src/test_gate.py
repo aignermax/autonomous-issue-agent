@@ -36,14 +36,22 @@ class TestGate:
         """Resolve the test command, or None if none is available.
 
         Resolution order:
-          1. config.test_cmd (explicit AGENT_TEST_CMD override, POSIX-split)
+          1. config.test_cmd (explicit AGENT_TEST_CMD override, split with
+             platform-appropriate quoting: POSIX off Windows, Windows-mode on Windows)
           2. {tools_python} {tools_dir}/smart_test.py if that file exists
           3. None
         """
         if not self.config.test_gate_enabled:
             return None
         if self.config.test_cmd:
-            return shlex.split(self.config.test_cmd, posix=(os.name != "nt"))
+            try:
+                return shlex.split(self.config.test_cmd, posix=(os.name != "nt"))
+            except ValueError as exc:
+                log.error(
+                    f"AGENT_TEST_CMD is not a parseable command ({exc}); "
+                    f"value={self.config.test_cmd!r}. Disabling gate this run."
+                )
+                return None
         tools_dir = self.config.tools_dir
         tools_python = self.config.tools_python
         if tools_dir and tools_python:
@@ -62,7 +70,8 @@ class TestGate:
         Returns:
             None if the gate is unavailable/disabled (skipped),
             ReviewResult(OK) on exit 0,
-            ReviewResult(BLOCKING) on non-zero exit, timeout, or launch failure.
+            ReviewResult(BLOCKING) on non-zero exit (combined stdout+stderr tail),
+            timeout, or launch failure.
         """
         cmd = self._resolve_command()
         if cmd is None:
@@ -92,7 +101,7 @@ class TestGate:
             log.error(f"Test gate command could not be launched: {exc}")
             return ReviewResult(
                 verdict="BLOCKING",
-                summary="Test command could not be launched.",
+                summary=f"Test command could not be launched: {exc}",
                 findings=[Finding(severity="BLOCKING", text=str(exc))],
             )
 

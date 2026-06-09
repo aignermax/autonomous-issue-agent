@@ -154,6 +154,9 @@ class TestRunReviewLoopWithGate:
             assert reviewer.review.call_count == 1
             assert worker.execute.call_count == 1
             assert result is False
+            pr.create_issue_comment.assert_called_once()
+            assert "BLOCKING" in pr.create_issue_comment.call_args[0][0]
+            agent.git.commit_and_push.assert_called_once()
 
     def test_gate_green_runs_reviewer(self, tmp_path):
         agent = self._make_agent(max_review_rounds=2)
@@ -173,6 +176,7 @@ class TestRunReviewLoopWithGate:
 
             assert reviewer.review.call_count == 1
             assert result is False
+            MockGate.return_value.run.assert_called_once()
 
     def test_gate_red_all_rounds_escalates(self, tmp_path):
         agent = self._make_agent(max_review_rounds=2)
@@ -202,3 +206,55 @@ class TestRunReviewLoopWithGate:
             # Round 1 posts a gate comment; round 2 (final) skips it and
             # _flag_for_human posts the single escalation comment instead.
             assert pr.create_issue_comment.call_count == 2
+
+    def test_gate_comment_failure_does_not_abort_loop(self, tmp_path):
+        agent = self._make_agent(max_review_rounds=2)
+        issue = MagicMock(); issue.labels = []
+        pr = MagicMock(number=1)
+        pr.create_issue_comment.side_effect = Exception("GitHub outage")
+
+        red = ReviewResult(verdict="BLOCKING", summary="red",
+                           findings=[Finding(severity="BLOCKING", text="boom")])
+        green = ReviewResult(verdict="OK", summary="green")
+        ok_review = ReviewResult(verdict="OK", summary="ok")
+
+        with patch("src.agent.Reviewer") as MockReviewer, \
+             patch("src.agent.TestGate") as MockGate, \
+             patch("src.agent.ClaudeCode") as MockClaude:
+            MockGate.return_value.run.side_effect = [red, green]
+            MockReviewer.return_value.review.return_value = ok_review
+            MockClaude.return_value.execute.return_value = ("done", False, MagicMock())
+
+            result = agent._run_review_loop(issue=issue, pr=pr,
+                                            branch="agent/issue-1",
+                                            worktree_path=tmp_path)
+            # Comment posting raised, but _post_gate_comment swallowed it and the loop finished.
+            assert result is False
+
+    def test_gate_red_single_round_escalates_without_retry(self, tmp_path):
+        agent = self._make_agent(max_review_rounds=1)
+        issue = MagicMock(); issue.labels = []
+        issue.add_to_labels = MagicMock()
+        pr = MagicMock(number=1)
+
+        red = ReviewResult(verdict="BLOCKING", summary="red",
+                           findings=[Finding(severity="BLOCKING", text="boom")])
+
+        with patch("src.agent.Reviewer") as MockReviewer, \
+             patch("src.agent.TestGate") as MockGate, \
+             patch("src.agent.ClaudeCode") as MockClaude:
+            MockGate.return_value.run.return_value = red
+            worker = MockClaude.return_value
+            worker.execute.return_value = ("", False, MagicMock())
+
+            result = agent._run_review_loop(issue=issue, pr=pr,
+                                            branch="agent/issue-1",
+                                            worktree_path=tmp_path)
+
+            # Single round: no worker retry, gate comment skipped (final round),
+            # only _flag_for_human's escalation comment posted.
+            assert worker.execute.call_count == 0
+            assert MockReviewer.return_value.review.call_count == 0
+            assert pr.create_issue_comment.call_count == 1
+            issue.add_to_labels.assert_called_once_with("needs-human")
+            assert result is True

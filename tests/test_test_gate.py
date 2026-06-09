@@ -43,6 +43,15 @@ class TestResolveCommand:
         assert TestGate(_config(tmp_path, test_cmd="pytest")).is_available() is True
         assert TestGate(_config(tmp_path)).is_available() is False
 
+    def test_malformed_cmd_returns_none(self, tmp_path):
+        gate = TestGate(_config(tmp_path, test_cmd='pytest "unclosed'))
+        assert gate._resolve_command() is None
+
+    def test_none_when_tools_dir_falsy(self, tmp_path):
+        c = _config(tmp_path)
+        c.tools_dir = None
+        assert TestGate(c)._resolve_command() is None
+
     def test_explicit_cmd_preserves_windows_path(self, tmp_path):
         import os
         gate = TestGate(_config(tmp_path, test_cmd=r"C:\tools\py.exe -q"))
@@ -79,6 +88,7 @@ class TestRun:
         assert len(result.findings) == 1
         assert "FAILED test_foo" in result.findings[0].text
         assert "traceback XYZ" in result.findings[0].text
+        assert result.raw_output == "FAILED test_footraceback XYZ"
 
     def test_timeout_is_blocking(self, tmp_path):
         gate = TestGate(_config(tmp_path, test_cmd="pytest", timeout=1))

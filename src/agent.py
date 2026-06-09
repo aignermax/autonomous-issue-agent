@@ -14,7 +14,7 @@ from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
 from .github_client import GitHubClient
-from .reviewer import Reviewer
+from .reviewer import Reviewer, ReviewResult
 from .session_state import SessionManager, SessionState
 from .test_gate import TestGate
 from .tools_bootstrap import ensure_tools_installed
@@ -745,7 +745,11 @@ class Agent:
 
         Each round runs the deterministic test gate first. If tests are red, the
         LLM reviewer is skipped for that round and the failure is sent straight
-        to the worker. Returns True if escalated to a human.
+        to the worker.
+
+        Returns:
+            True if escalated to a human (issue should NOT be closed).
+            False if all checks passed and the issue may be closed.
         """
         from .prompt_template import build_retry_prompt
 
@@ -753,6 +757,7 @@ class Agent:
         gate = TestGate(self.config)
         base_branch = self.git.default_branch
 
+        blocking = None
         for round_num in range(1, self.config.max_review_rounds + 1):
             log.info(
                 f"Review round {round_num}/{self.config.max_review_rounds} "
@@ -763,9 +768,13 @@ class Agent:
             if gate_result is not None and gate_result.has_blocking:
                 log.warning(f"Test gate BLOCKING on round {round_num}")
                 blocking = gate_result
+                # On the final round _flag_for_human posts the escalation comment,
+                # so skip the (redundant) gate comment there.
                 if round_num < self.config.max_review_rounds:
                     self._post_gate_comment(pr, gate_result)
             else:
+                # Reached when the gate is skipped (None) OR passed (OK) — both
+                # intentionally proceed to the LLM reviewer.
                 result = reviewer.review(
                     issue=issue, pr=pr, branch=branch,
                     base_branch=base_branch, worktree_path=worktree_path,
@@ -780,6 +789,9 @@ class Agent:
                     f"Max review rounds reached ({self.config.max_review_rounds}); "
                     f"flagging PR #{pr.number}"
                 )
+                if blocking is None:
+                    log.error("Reached max rounds with no blocking result captured (bug); escalating anyway.")
+                    blocking = ReviewResult(verdict="BLOCKING", summary="No blocking result captured.")
                 self._flag_for_human(issue, pr, blocking)
                 return True
 
@@ -818,7 +830,10 @@ class Agent:
                 f"## Automated Test Gate — **BLOCKING**\n\n{result.summary}"
             )
         except Exception as e:
-            log.warning(f"Could not post test-gate comment on PR #{pr.number}: {e}")
+            log.error(
+                f"Could not post test-gate comment on PR #{pr.number}: {e}. "
+                f"Gate result still sent to worker, but the PR has no visible record of this block."
+            )
 
     def _flag_for_human(self, issue, pr, result) -> None:
         """Add `needs-human` label and post escalation comment."""
@@ -829,7 +844,8 @@ class Agent:
         try:
             pr.create_issue_comment(
                 f"Reached max review rounds ({self.config.max_review_rounds}) "
-                f"with BLOCKING findings remaining. Last summary: {result.summary}"
+                f"with an unresolved BLOCKING result (test gate or reviewer). "
+                f"Last summary: {result.summary}"
             )
         except Exception as e:
             log.error(f"Could not post escalation comment: {e}")
