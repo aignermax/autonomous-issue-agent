@@ -49,6 +49,11 @@ class Config:
         self.critical_label: str = os.environ.get("AGENT_CRITICAL_LABEL", "critical")
         self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "50"))
 
+        # Test gate: deterministic build/test run before the LLM reviewer
+        self.test_gate_enabled: bool = os.environ.get("AGENT_TEST_GATE", "true").lower() == "true"
+        self.test_cmd: Optional[str] = os.environ.get("AGENT_TEST_CMD")
+        self.test_timeout: int = int(os.environ.get("AGENT_TEST_TIMEOUT", "1800"))
+
         # Resource limits based on complexity
         # Regular tasks (agent-task only): Simple fixes, docs, small features
         self.max_turns_regular: int = int(os.environ.get("AGENT_MAX_TURNS_REGULAR", "150"))
