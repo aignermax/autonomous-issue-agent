@@ -3,6 +3,7 @@ GitHub API client for issue and PR management.
 """
 
 import os
+import re
 import logging
 from github import Github, Auth
 from typing import Optional
@@ -156,3 +157,46 @@ class GitHubClient:
             comment: Comment text
         """
         issue.create_comment(comment)
+
+    _CLAIM_MARKER = re.compile(r"<!--\s*AIA-CLAIM:\s*(.+?)\s*-->")
+
+    def post_claim(self, issue, agent_id: str) -> None:
+        """Post a machine-parseable claim marker comment for race resolution.
+
+        Args:
+            issue: GitHub Issue object.
+            agent_id: Unique per-process identity of the claiming agent.
+        """
+        issue.create_comment(
+            f"🤖 Agent claim — `{agent_id}`\n\n<!-- AIA-CLAIM:{agent_id} -->"
+        )
+
+    def claim_winner(self, issue) -> Optional[str]:
+        """Return the agent id that won the claim race for this issue.
+
+        The winner is the agent whose claim marker comment has the lowest
+        server-assigned comment id (earliest creation). Returns None if no
+        claim markers exist or the comments cannot be read.
+
+        Args:
+            issue: GitHub Issue object.
+
+        Returns:
+            Winning agent id, or None.
+        """
+        try:
+            comments = list(issue.get_comments())
+        except Exception as e:
+            log.warning(f"Could not read comments for issue #{issue.number}: {e}")
+            return None
+
+        winner_id = None
+        winner_comment_id = None
+        for comment in comments:
+            match = self._CLAIM_MARKER.search(comment.body or "")
+            if not match:
+                continue
+            if winner_comment_id is None or comment.id < winner_comment_id:
+                winner_comment_id = comment.id
+                winner_id = match.group(1)
+        return winner_id

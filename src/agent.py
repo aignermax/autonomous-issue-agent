@@ -6,6 +6,8 @@ import os
 import time
 import logging
 import re
+import socket
+import uuid
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -31,6 +33,7 @@ class IssueResult:
     pr_url: str = ""
     error: str = ""
     needs_continuation: bool = False
+    lost_claim_race: bool = False
 
 
 class Agent:
@@ -62,6 +65,8 @@ class Agent:
             log.warning(f"Tools bootstrap failed: {e}. Prompts will reference relative 'tools/'.")
         # Round-robin state: track which repo was checked last
         self._last_repo_index = -1
+        # Unique per-process identity used to win/lose issue claim races.
+        self.agent_id = f"{socket.gethostname()}:{uuid.uuid4().hex[:8]}"
 
     def _count_tool_usage(self, output: str) -> dict:
         """
@@ -253,9 +258,34 @@ class Agent:
 
         return state, branch
 
+    def _claim_won(self, issue) -> bool:
+        """Post this agent's claim marker and return whether it won the race.
+
+        The winner is the earliest claim marker (lowest server comment id). If
+        this agent cannot post its own marker, it backs off (returns False) — it
+        cannot prove it won. If the marker posts but no winner can be determined
+        (claim_winner returns None: no markers visible yet due to API replication
+        lag, or comments unreadable), it is treated as won, because a permanently
+        unprocessed issue is worse than a rare duplicate run.
+        """
+        try:
+            self.github.post_claim(issue, self.agent_id)
+            log.info(f"Posted claim for issue #{issue.number} as {self.agent_id}")
+        except Exception as e:
+            log.error(
+                f"Could not post claim marker for issue #{issue.number}: {e}; "
+                f"backing off to avoid an unverified duplicate run"
+            )
+            return False
+        winner = self.github.claim_winner(issue)
+        if winner is None or winner == self.agent_id:
+            return True
+        log.warning(f"Lost claim race for issue #{issue.number} to {winner}; backing off")
+        return False
+
     def _claim_issue_and_create_branch(self, issue) -> str:
         """
-        Claim an issue by removing label, assigning to bot user, and determine branch name.
+        Claim an issue by removing the activation label and assigning it to the repository owner (a human-visible lock), and determine the branch name. The claim marker and race verification are handled by _claim_won.
 
         Args:
             issue: GitHub Issue object
@@ -265,33 +295,21 @@ class Agent:
         """
         issue_num = issue.number
 
-        # LOCK the issue by removing the activation label AND assigning to self
+        # Remove the activation label so the issue leaves the polling queue.
         try:
             log.info(f"Claiming issue #{issue_num} by removing '{self.config.issue_label}' label")
             issue.remove_from_labels(self.config.issue_label)
             log.info(f"Issue #{issue_num} locked (label removed)")
-
-            import socket
-            hostname = socket.gethostname()
-
-            # Try to assign issue to current user (persistent lock across agents)
-            try:
-                # Get current authenticated user
-                user = self.github.repo.organization or self.github.repo.owner
-                username = self.github.repo._requester._Requester__auth._Auth__token  # Get auth info
-                # Assign to current user - this persists even if agent crashes
-                issue.add_to_assignees(self.github.repo.owner.login)
-                log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login} for persistent lock")
-            except Exception as assign_error:
-                log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
-                log.warning("Lock will only be via label removal (less reliable for multi-agent)")
-
-            issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
-            log.info(f"Posted claim comment with hostname: {hostname}")
         except Exception as e:
-            log.warning(f"Could not remove label or post comment on issue #{issue_num}: {e}")
-            log.warning("This might indicate expired GitHub token or permission issue")
-            log.warning("Continuing anyway, but other agents might pick this up too")
+            log.warning(f"Could not remove label from issue #{issue_num}: {e}")
+
+        # Assign to the repo owner as a persistent, human-visible lock (idempotent
+        # across agents; the claim marker, posted by _claim_won, is the real tiebreak).
+        try:
+            issue.add_to_assignees(self.github.repo.owner.login)
+            log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login}")
+        except Exception as assign_error:
+            log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
 
         # Determine branch name
         target_branch = self._extract_branch_from_issue(issue)
@@ -541,15 +559,13 @@ class Agent:
             log.error(f"Issue #{issue_num} failed {state.session_count} times, giving up.")
             log.error(f"Manual intervention required. Last error: {str(error)[:500]}")
             try:
-                import socket
-                hostname = socket.gethostname()
                 issue.create_comment(
-                    f"❌ Agent `{hostname}` failed to complete this issue after {state.session_count} attempts.\n\n"
+                    f"❌ Agent `{self.agent_id}` failed to complete this issue after {state.session_count} attempts.\n\n"
                     f"Last error: `{str(error)[:300]}`\n\n"
                     f"Please investigate manually."
                 )
-            except:
-                pass
+            except Exception as comment_error:
+                log.warning(f"Could not post failure comment on issue #{issue_num}: {comment_error}")
 
         return IssueResult(success=False, branch=branch, error=str(error))
 
@@ -587,6 +603,16 @@ class Agent:
             branch = existing_state.branch_name
         else:
             branch = self._claim_issue_and_create_branch(issue)
+            # Atomic-claim verify: only the winner proceeds. A None winner
+            # (no markers / read error) is treated as won to avoid permanently
+            # skipping an issue; see _claim_won.
+            if not self._claim_won(issue):
+                return IssueResult(
+                    success=False,
+                    branch=branch,
+                    error="Lost claim race to another agent",
+                    lost_claim_race=True,
+                )
 
         worktree_path = self.worktrees.create(
             repo_path=self.config.local_path,
@@ -926,7 +952,10 @@ class Agent:
                 continue
 
             # Failed without continuation
-            log.error(f"Issue #{issue.number} failed: {result.error}")
+            if result.lost_claim_race:
+                log.info(f"Issue #{issue.number}: another agent claimed it; backing off.")
+            else:
+                log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
         # Done processing (or no issue found)
@@ -969,7 +998,10 @@ class Agent:
                 continue
 
             # Failed without continuation
-            log.error(f"Issue #{issue.number} failed: {result.error}")
+            if result.lost_claim_race:
+                log.info(f"Issue #{issue.number}: another agent claimed it; backing off.")
+            else:
+                log.error(f"Issue #{issue.number} failed: {result.error}")
             break
 
     def restart_current_issue(self) -> bool:
