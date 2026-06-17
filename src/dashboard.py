@@ -50,7 +50,7 @@ class AgentStatus:
     current_issue: Optional[int]
     current_turn: Optional[int]
     max_turns: Optional[int]
-    state: str  # "polling", "working", "idle", "error"
+    state: str  # "polling" | "working" | "reviewing" | "qa" | "idle" | "error" | "stopped"
     next_poll_in: Optional[timedelta]
     last_activity: Optional[timedelta]  # Time since last log entry
     cpu_percent: Optional[float]  # CPU usage percentage
@@ -58,6 +58,7 @@ class AgentStatus:
     duplicate_agents: int = 0  # Number of duplicate agent processes detected
     issue_complexity: Optional[str] = None  # "REGULAR" or "COMPLEX"
     current_branch: Optional[str] = None  # Working branch (e.g., "agent/issue-110-...")
+    current_pr: Optional[int] = None  # PR number when state is "reviewing" or "qa"
 
 
 @dataclass
@@ -213,7 +214,7 @@ class DashboardMonitor:
         all_agents = self.get_all_agent_processes()
 
         if not all_agents:
-            return AgentStatus(False, None, None, None, None, "stopped", None, None, None, None, 0)
+            return AgentStatus(False, None, None, None, None, "stopped", None, None, None, None, 0, None, None, None)
 
         # Use the most recently started agent
         all_agents.sort(key=lambda x: x[1], reverse=True)
@@ -225,6 +226,7 @@ class DashboardMonitor:
         # Parse last lines of agent.log to determine state
         state = "polling"
         current_issue = None
+        current_pr = None
         current_branch = None
         next_poll_in = None
         current_turn = None
@@ -236,67 +238,103 @@ class DashboardMonitor:
 
         if self.agent_log.exists():
             try:
+                import re
+
                 # Get last modification time of log file
                 log_mtime = datetime.fromtimestamp(self.agent_log.stat().st_mtime)
                 last_activity = datetime.now() - log_mtime
 
+                # Read a generous tail. Worker phases can emit hundreds of
+                # "Claude Code activity" lines, so a small window drops the
+                # earlier phase markers (Found issue, Reviewer running, ...).
                 with open(self.agent_log, 'r') as f:
-                    lines = f.readlines()[-50:]  # Last 50 lines
+                    lines = f.readlines()[-1000:]
 
-                # First pass: check for issue complexity and branch
+                # First pass: collect complexity + branch info from anywhere in
+                # the window (these can come from before the current phase).
                 for line in lines:
-                    if "marked as COMPLEX" in line:
+                    if "marked as COMPLEX" in line or "→ COMPLEX mode" in line:
                         issue_complexity = "COMPLEX"
-                    elif "marked as REGULAR" in line:
+                    elif "marked as REGULAR" in line or "→ REGULAR mode" in line:
                         issue_complexity = "REGULAR"
 
-                    # Extract branch name
                     if "Creating new branch:" in line or "Checking out existing branch:" in line:
-                        import re
-                        match = re.search(r'branch:\s+(agent/[^\s]+)', line)
-                        if match:
-                            current_branch = match.group(1)
+                        m = re.search(r'branch:\s+(agent/[^\s]+)', line)
+                        if m:
+                            current_branch = m.group(1)
+
+                # Phase detection: walk from newest to oldest and pick the
+                # first phase marker we see. Reviewer / QA logs come BEFORE
+                # their own "Invoking Claude Code" line — so checking phase
+                # markers first (and stopping at the first hit) yields the
+                # actual current phase even though the generic Invoking line
+                # is newer in the log.
+                phase_re_qa = re.compile(
+                    r'\[qa-review\] running on PR #(\d+)'
+                    r'|\[qa\] verifying PR #(\d+)'
+                )
+                phase_re_review = re.compile(r'Reviewer running on PR #(\d+)')
+                phase_re_worker = re.compile(r'Found issue #(\d+)')
+                phase_re_sleep = re.compile(r'Sleeping (\d+)s')
+                phase_re_ts = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
 
                 for line in reversed(lines):
-                    # Check for sleeping (polling state)
-                    if "Sleeping" in line and "s ..." in line:
-                        import re
-                        match = re.search(r'Sleeping (\d+)s', line)
-                        if match:
-                            sleep_seconds = int(match.group(1))
-                            timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
-                            if timestamp_match:
-                                log_time = datetime.strptime(timestamp_match.group(1), "%Y-%m-%d %H:%M:%S")
-                                elapsed = (datetime.now() - log_time).total_seconds()
-                                remaining = max(0, sleep_seconds - elapsed)
-                                next_poll_in = timedelta(seconds=remaining)
-                        state = "polling"
-                        break
-
-                    # Check for working on issue
-                    if "Invoking Claude Code" in line:
-                        state = "working"
-                        # Extract session start time
-                        import re
-                        timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
-                        if timestamp_match:
-                            session_start_time = datetime.strptime(timestamp_match.group(1), "%Y-%m-%d %H:%M:%S")
-                            session_duration = datetime.now() - session_start_time
-
-                        for l in reversed(lines):
-                            if "Found issue #" in l:
-                                match = re.search(r'issue #(\d+)', l)
-                                if match:
-                                    current_issue = int(match.group(1))
-                                    break
-                        break
-
-                    # Check for errors
                     if "ERROR" in line and "Failed processing issue" in line:
                         state = "error"
                         break
 
-            except Exception as e:
+                    m = phase_re_qa.search(line)
+                    if m:
+                        state = "qa"
+                        current_pr = int(m.group(1) or m.group(2))
+                        ts = phase_re_ts.search(line)
+                        if ts:
+                            session_start_time = datetime.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S")
+                            session_duration = datetime.now() - session_start_time
+                        break
+
+                    m = phase_re_review.search(line)
+                    if m:
+                        state = "reviewing"
+                        current_pr = int(m.group(1))
+                        ts = phase_re_ts.search(line)
+                        if ts:
+                            session_start_time = datetime.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S")
+                            session_duration = datetime.now() - session_start_time
+                        break
+
+                    m = phase_re_worker.search(line)
+                    if m:
+                        state = "working"
+                        current_issue = int(m.group(1))
+                        ts = phase_re_ts.search(line)
+                        if ts:
+                            session_start_time = datetime.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S")
+                            session_duration = datetime.now() - session_start_time
+                        break
+
+                    m = phase_re_sleep.search(line)
+                    if m:
+                        state = "polling"
+                        sleep_seconds = int(m.group(1))
+                        ts = phase_re_ts.search(line)
+                        if ts:
+                            log_time = datetime.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S")
+                            elapsed = (datetime.now() - log_time).total_seconds()
+                            remaining = max(0, sleep_seconds - elapsed)
+                            next_poll_in = timedelta(seconds=remaining)
+                        break
+
+                # If we're past the worker phase (reviewing/qa), the original
+                # issue number is still useful context — find it independently.
+                if state in ("reviewing", "qa") and current_issue is None:
+                    for l in reversed(lines):
+                        m = re.search(r'Found issue #(\d+)', l)
+                        if m:
+                            current_issue = int(m.group(1))
+                            break
+
+            except Exception:
                 pass
 
         # Get CPU usage - check claude child process if working, agent process if polling
@@ -304,8 +342,8 @@ class DashboardMonitor:
         try:
             target_pid = pid  # Default to agent PID
 
-            # If working on an issue, find claude child process of THIS agent
-            if state == "working":
+            # If a Claude subprocess is active (worker/reviewer/qa), use its CPU
+            if state in ("working", "reviewing", "qa"):
                 # Find claude process that is a child of the agent process
                 result = subprocess.run(
                     ["ps", "-eo", "pid,ppid,cmd"],
@@ -340,7 +378,7 @@ class DashboardMonitor:
         return AgentStatus(
             True, pid, current_issue, current_turn, max_turns,
             state, next_poll_in, last_activity, cpu_percent, session_duration,
-            duplicate_count, issue_complexity, current_branch
+            duplicate_count, issue_complexity, current_branch, current_pr
         )
 
     def _format_repo_name(self, repo_name: str) -> str:
@@ -482,7 +520,11 @@ class Dashboard:
 
         # Status indicator
         if status.state == "working":
-            status_text = Text("[>] Working", style="bold yellow")
+            status_text = Text("[>] Worker", style="bold yellow")
+        elif status.state == "reviewing":
+            status_text = Text("[R] Reviewer", style="bold magenta")
+        elif status.state == "qa":
+            status_text = Text("[Q] QA", style="bold blue")
         elif status.state == "polling":
             status_text = Text("[+] Polling", style="bold green")
         elif status.state == "error":
@@ -508,12 +550,16 @@ class Dashboard:
             else:
                 issue_display = f"#{status.current_issue}"
             table.add_row("Current Issue", issue_display)
+            if status.current_pr:
+                table.add_row("Current PR", Text(f"#{status.current_pr}", style="magenta"))
             if status.current_branch:
                 table.add_row("Working Branch", Text(status.current_branch, style="green"))
             if status.current_turn and status.max_turns:
                 table.add_row("Progress", f"Turn {status.current_turn}/{status.max_turns}")
         else:
             table.add_row("Current Issue", Text("None", style="dim"))
+            if status.current_pr:
+                table.add_row("Current PR", Text(f"#{status.current_pr}", style="magenta"))
 
         # Last Activity (Heartbeat!)
         if status.last_activity:
@@ -550,8 +596,8 @@ class Dashboard:
                 cpu_str = f"{status.cpu_percent:.1f}% (idle)"
                 cpu_color = "yellow"
             else:
-                # 0% CPU while working = hung?
-                if status.state == "working":
+                # 0% CPU while a Claude subprocess should be running = hung?
+                if status.state in ("working", "reviewing", "qa"):
                     cpu_str = f"{status.cpu_percent:.1f}% (hung?)"
                     cpu_color = "red"
                 else:
@@ -560,8 +606,8 @@ class Dashboard:
 
             table.add_row("CPU Usage", Text(cpu_str, style=cpu_color))
 
-        # Session Duration (for working state)
-        if status.session_duration and status.state == "working":
+        # Session Duration (for any active Claude subprocess phase)
+        if status.session_duration and status.state in ("working", "reviewing", "qa"):
             mins = int(status.session_duration.total_seconds() // 60)
             secs = int(status.session_duration.total_seconds() % 60)
             if mins < 60:

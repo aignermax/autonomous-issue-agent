@@ -40,23 +40,45 @@ class Config:
         self.tools_dir: Optional[Path] = None
         self.tools_python: Optional[Path] = None
 
-        # Reviewer settings
-        self.max_review_rounds: int = int(os.environ.get("AGENT_MAX_REVIEW_ROUNDS", "2"))
+        # QA-fix loop: cap how many times the coder will retry a PR that
+        # QA has rejected before escalating to a human.
+        self.max_qa_fix_rounds: int = int(os.environ.get("AGENT_MAX_QA_FIX_ROUNDS", "2"))
+
+        # Reviewer settings. Review rounds depend on issue complexity:
+        # regular tasks usually nail it in one pass; complex PRs are worth
+        # re-verifying after the worker addresses round-1 feedback.
+        # AGENT_MAX_REVIEW_ROUNDS (no suffix) is honored as a legacy override
+        # — if set, it wins over the per-complexity values.
+        _legacy_rounds = os.environ.get("AGENT_MAX_REVIEW_ROUNDS")
+        self.max_review_rounds_regular: int = int(
+            os.environ.get("AGENT_MAX_REVIEW_ROUNDS_REGULAR", _legacy_rounds or "1")
+        )
+        self.max_review_rounds_complex: int = int(
+            os.environ.get("AGENT_MAX_REVIEW_ROUNDS_COMPLEX", _legacy_rounds or "2")
+        )
+        # Kept for callers that haven't migrated; equals the complex value
+        # (the more conservative default) when the legacy var is unset.
+        self.max_review_rounds: int = int(_legacy_rounds or self.max_review_rounds_complex)
         self.reviewer_model_default: str = os.environ.get(
             "AGENT_REVIEWER_MODEL", "claude-sonnet-4-6")
         self.reviewer_model_critical: str = os.environ.get(
             "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-7")
         self.critical_label: str = os.environ.get("AGENT_CRITICAL_LABEL", "critical")
-        self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "50"))
+        self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "80"))
 
-        # Resource limits based on complexity
+        # Resource limits based on complexity. Budgets need to cover three
+        # agents per issue (Worker + Reviewer + QA), each potentially looping:
+        # Worker→Reviewer up to MAX_REVIEW_ROUNDS, plus a QA-fix loop up to
+        # MAX_QA_FIX_ROUNDS. A single PR review can already burn ~500k
+        # tokens, so the multi-role pipeline needs significantly more
+        # headroom than the single-agent baseline did.
         # Regular tasks (agent-task only): Simple fixes, docs, small features
         self.max_turns_regular: int = int(os.environ.get("AGENT_MAX_TURNS_REGULAR", "150"))
-        self.max_tokens_regular: int = int(os.environ.get("AGENT_MAX_TOKENS_REGULAR", "8000000"))  # 8M tokens ≈ €24-40
+        self.max_tokens_regular: int = int(os.environ.get("AGENT_MAX_TOKENS_REGULAR", "20000000"))  # 20M tokens
 
         # Complex tasks (agent-task + complex tag): Full features, refactoring, architecture
         self.max_turns_complex: int = int(os.environ.get("AGENT_MAX_TURNS_COMPLEX", "500"))
-        self.max_tokens_complex: int = int(os.environ.get("AGENT_MAX_TOKENS_COMPLEX", "15000000"))  # 15M tokens ≈ €45-75
+        self.max_tokens_complex: int = int(os.environ.get("AGENT_MAX_TOKENS_COMPLEX", "50000000"))  # 50M tokens
 
         # Defaults (will be overridden per issue based on complexity tag)
         self.max_turns: int = self.max_turns_regular

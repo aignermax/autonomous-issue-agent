@@ -2,12 +2,35 @@
 Git repository operations for the agent.
 """
 
+import os
 import subprocess
 import logging
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("agent")
+
+
+# Hard upper bounds. The agent is autonomous; if a git command takes longer
+# than this it's almost certainly hung on a credential prompt, a stalled
+# TCP connection, or a dead remote. Bail out and surface a real error
+# instead of sleeping in `do_sys_poll` forever (see Lunima #518 demo run).
+DEFAULT_GIT_TIMEOUT_SEC = int(os.environ.get("AGENT_GIT_TIMEOUT_SEC", "120"))
+CLONE_GIT_TIMEOUT_SEC = int(os.environ.get("AGENT_GIT_CLONE_TIMEOUT_SEC", "600"))
+
+
+def _no_prompt_env() -> dict:
+    """Env that prevents git from blocking on credential prompts.
+
+    The bot can't answer a prompt — if the URL doesn't already embed the
+    token, the operation should fail immediately, not wait on stdin.
+    """
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # Some auth flows still try GIT_ASKPASS even with the above; force it
+    # to a binary that exits non-zero so the prompt path errors out.
+    env.setdefault("GIT_ASKPASS", "echo")
+    return env
 
 
 class GitRepo:
@@ -26,22 +49,43 @@ class GitRepo:
         self.remote_url = remote_url
         self.default_branch = default_branch
 
-    def run(self, *args: str) -> subprocess.CompletedProcess:
+    def run(self, *args: str,
+            timeout: Optional[int] = None) -> subprocess.CompletedProcess:
         """
         Run a git command in the repository directory.
 
         Args:
             *args: Git command arguments
+            timeout: Per-call timeout in seconds; defaults to
+                DEFAULT_GIT_TIMEOUT_SEC. A TimeoutExpired is converted into
+                a CompletedProcess with returncode=124 so existing callers
+                that only check returncode behave consistently.
 
         Returns:
             CompletedProcess result
         """
-        result = subprocess.run(
-            ["git", *args],
-            cwd=self.path,
-            capture_output=True,
-            text=True,
-        )
+        timeout = timeout or DEFAULT_GIT_TIMEOUT_SEC
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=self.path,
+                capture_output=True,
+                text=True,
+                env=_no_prompt_env(),
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            log.error(
+                f"git {' '.join(args)} timed out after {timeout}s — "
+                "treating as failure"
+            )
+            return subprocess.CompletedProcess(
+                args=["git", *args],
+                returncode=124,  # GNU `timeout` convention
+                stdout=(e.stdout.decode("utf-8", "replace")
+                        if isinstance(e.stdout, bytes) else (e.stdout or "")),
+                stderr=f"git {' '.join(args)} timed out after {timeout}s",
+            )
         if result.returncode != 0:
             log.warning(f"git {' '.join(args)}: {result.stderr.strip()}")
         return result
@@ -54,12 +98,20 @@ class GitRepo:
         """
         if not (self.path / ".git").exists():
             log.info(f"Cloning {self.remote_url} ...")
-            subprocess.run(
-                ["git", "clone", self.remote_url, str(self.path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                subprocess.run(
+                    ["git", "clone", self.remote_url, str(self.path)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=_no_prompt_env(),
+                    timeout=CLONE_GIT_TIMEOUT_SEC,
+                )
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(
+                    f"git clone {self.remote_url} timed out after "
+                    f"{CLONE_GIT_TIMEOUT_SEC}s"
+                )
         else:
             # CRITICAL: Clean any uncommitted changes first to avoid conflicts
             self._ensure_clean_state()
@@ -72,13 +124,13 @@ class GitRepo:
                 self.run("checkout", working_branch)
 
             # Fetch latest changes first
-            fetch_result = self.run("fetch", "origin")
+            fetch_result = self.run("fetch", "origin", timeout=CLONE_GIT_TIMEOUT_SEC)
             if fetch_result.returncode != 0:
                 log.error(f"Failed to fetch from origin")
                 raise RuntimeError(f"Failed to fetch: {fetch_result.stderr}")
 
             # Try fast-forward pull first
-            pull_result = self.run("pull", "--ff-only")
+            pull_result = self.run("pull", "--ff-only", timeout=CLONE_GIT_TIMEOUT_SEC)
             if pull_result.returncode != 0:
                 # If fast-forward fails (diverging branches), reset to remote state
                 log.warning(f"Fast-forward pull failed (diverging branches), resetting to origin/{working_branch}")
@@ -157,7 +209,10 @@ class GitRepo:
             log.info(f"Found {unpushed_count} unpushed commit(s), pushing to origin...")
 
             # Try to push - if rejected due to diverging branches, fetch and handle conflict
-            push_result = self.run("push", "--set-upstream", "origin", branch)
+            push_result = self.run(
+                "push", "--set-upstream", "origin", branch,
+                timeout=CLONE_GIT_TIMEOUT_SEC,
+            )
 
             if push_result.returncode != 0:
                 # Push failed - check if it's because of diverging branches
@@ -165,7 +220,7 @@ class GitRepo:
                     log.warning(f"Push rejected - remote branch has diverged")
 
                     # Fetch latest remote state
-                    self.run("fetch", "origin", branch)
+                    self.run("fetch", "origin", branch, timeout=CLONE_GIT_TIMEOUT_SEC)
 
                     # Check if we have diverging commits
                     behind_result = self.run("rev-list", "--count", f"{branch}..origin/{branch}")
@@ -180,7 +235,10 @@ class GitRepo:
                     # This handles the case where Claude Code created commits locally that differ from remote
                     if commits_behind == 0 and commits_ahead > 0:
                         log.info("Local has new commits, remote hasn't diverged - force pushing")
-                        force_push = self.run("push", "--force-with-lease", "origin", branch)
+                        force_push = self.run(
+                            "push", "--force-with-lease", "origin", branch,
+                            timeout=CLONE_GIT_TIMEOUT_SEC,
+                        )
                         if force_push.returncode != 0:
                             log.error(f"Force push failed: {force_push.stderr}")
                             raise RuntimeError(f"Failed to push branch {branch}: {force_push.stderr}")

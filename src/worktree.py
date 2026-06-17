@@ -74,13 +74,81 @@ class WorktreeManager:
         if local.returncode == 0:
             cmd = ["git", "worktree", "add", str(target), branch]
         else:
-            cmd = ["git", "worktree", "add", "-b", branch, str(target), base]
+            # The caller asks us to derive from `base` (e.g. "dev"). The main
+            # checkout might only have it as a remote-tracking ref — for
+            # example, the first time a repo's `dev` branch is touched the
+            # local clone still sits on `main`. Fall back to `origin/base`
+            # so worktree creation doesn't fail with "invalid reference".
+            base_ref = self._resolve_base_ref(repo_path, base)
+            cmd = ["git", "worktree", "add", "-b", branch, str(target), base_ref]
 
+        log.info(f"worktree cmd: {' '.join(cmd)} (cwd={repo_path})")
         result = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True)
         if result.returncode != 0:
+            log.error(
+                f"worktree add failed (rc={result.returncode})\n"
+                f"  cmd: {cmd}\n  cwd: {repo_path}\n"
+                f"  stdout: {result.stdout!r}\n  stderr: {result.stderr!r}"
+            )
             raise RuntimeError(f"git worktree add failed: {result.stderr}")
         log.info(f"Created worktree: {target} (branch {branch})")
+
+        # If the main checkout has a CodeGraph index, share it with this
+        # worktree via a symlink so the MCP server resolves the same SQLite
+        # DB. Without this the worker subprocess sees "not initialized"
+        # because `.codegraph/` lives in the main checkout only.
+        self._link_codegraph_index(main_repo=repo_path, worktree=target)
+
         return target
+
+    @staticmethod
+    def _link_codegraph_index(main_repo: Path, worktree: Path) -> None:
+        """Symlink `<worktree>/.codegraph -> <main_repo>/.codegraph` if present.
+
+        Silent no-op when the main repo isn't indexed yet, or when a link /
+        directory already exists at the target (we don't overwrite — a user
+        may have intentionally seeded a per-worktree index).
+        """
+        src = (main_repo / ".codegraph").resolve()
+        if not src.is_dir():
+            return
+        dst = worktree / ".codegraph"
+        if dst.exists() or dst.is_symlink():
+            return
+        try:
+            dst.symlink_to(src, target_is_directory=True)
+            log.info(f"Linked codegraph index: {dst} -> {src}")
+        except OSError as exc:
+            log.warning(f"Could not symlink codegraph index into {worktree}: {exc}")
+
+    @staticmethod
+    def _resolve_base_ref(repo_path: Path, base: str) -> str:
+        """Resolve `base` to something `git worktree add -b ... <ref>` accepts.
+
+        Order of preference:
+            1. local branch `base`
+            2. remote-tracking ref `origin/base`
+            3. `base` as given (caller gets a clean error from git if both miss)
+        """
+        for candidate in (base, f"origin/{base}"):
+            check = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", candidate],
+                cwd=repo_path, capture_output=True, text=True,
+            )
+            log.info(
+                f"_resolve_base_ref: candidate={candidate!r} rc={check.returncode} "
+                f"out={check.stdout.strip()!r} err={check.stderr.strip()!r} cwd={repo_path}"
+            )
+            if check.returncode == 0:
+                if candidate != base:
+                    log.info(
+                        f"Base ref '{base}' missing locally; using '{candidate}' instead"
+                    )
+                return candidate
+        log.warning(
+            f"_resolve_base_ref: neither {base!r} nor 'origin/{base}' resolve in {repo_path}"
+        )
+        return base
 
     def remove(self, repo_path: Path, branch: str) -> None:
         """Remove a worktree by branch. Does not delete the branch itself.

@@ -20,15 +20,18 @@ Automatically:
 - Creates .env from template
 
 ### `start.bat` (Windows)
-**Windows launcher** - Double-click to start!
+**Windows launcher** — double-click to start agent + dashboard.
 
-Opens WSL terminal with interactive dashboard. Works from any directory (no hardcoded paths).
+Thin wrapper that opens WSL (prefers Windows Terminal) and runs `run.sh`.
 
-### `dashboard_interactive.sh` (Linux/Mac)
-**Interactive dashboard** - Recommended way to run the agent
+### `start-agent-autostart.bat` (Windows)
+**Wrapper for shell:startup / Task Scheduler.** Just calls `start.bat`, so the launch logic stays in one place.
+
+### `run.sh` (Linux/Mac, WSL)
+**Single source of truth.** Sets up the PATH (dotnet, codegraph, cargo), starts the agent in the background, and runs the interactive dashboard in the foreground.
 
 ```bash
-./dashboard_interactive.sh
+./run.sh
 ```
 
 Features:
@@ -37,17 +40,7 @@ Features:
 - Start/stop controls
 - Token usage tracking
 - CPU and session info
-
-## 🔧 Utility Scripts
-
-### `run.sh`
-**Background agent runner** with system sleep prevention
-
-```bash
-./run.sh
-```
-
-Uses `gnome-session-inhibit` on Linux to prevent system sleep during operation.
+- Uses `gnome-session-inhibit` when available to prevent system sleep
 
 ## 📦 Tools (in `tools/` directory)
 
@@ -94,11 +87,11 @@ The following scripts were removed to reduce confusion:
 **On Windows?**
 → Double-click `start.bat`
 
-**On Linux/Mac?**
-→ Run `./dashboard_interactive.sh`
+**On Linux/Mac / inside WSL?**
+→ Run `./run.sh`
 
 **Want to install tools for Claude Code?**
 → Use `tools/install.sh`
 
-**Running as background service?**
-→ Use `run.sh` (prevents system sleep)
+**Want unattended startup after Windows reboots?**
+→ See `AUTOSTART.md` — point Task Scheduler at `start-agent-autostart.bat`

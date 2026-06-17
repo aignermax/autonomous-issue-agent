@@ -324,7 +324,7 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${BLUE}Next steps:${NC}"
 echo -e "  1. Edit .env with your API keys (if not done yet)"
-echo -e "  2. Run: ${YELLOW}./dashboard_interactive.sh${NC} (recommended)"
+echo -e "  2. Run: ${YELLOW}./run.sh${NC} (recommended — starts agent + dashboard)"
 echo -e "     Or: ${YELLOW}source venv/bin/activate && python3 main.py${NC}"
 echo ""
 echo -e "${BLUE}Tools installed:${NC}"

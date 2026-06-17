@@ -55,3 +55,11 @@ dotnet-install.sh*
 
 # MCP servers cloned at runtime — see README "MCP Servers" section
 mcp-servers/
+
+# IDE / editor state
+.vs/
+# rotated log backups
+agent.log.*
+agent_demo.log
+# claude scheduler lock
+.claude/scheduled_tasks.lock

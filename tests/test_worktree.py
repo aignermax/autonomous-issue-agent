@@ -91,6 +91,66 @@ class TestWorktreeManager:
         assert p1 != p2
         assert p1.is_dir() and p2.is_dir()
 
+    def test_base_falls_back_to_origin_when_local_missing(self, tmp_path):
+        """Reproduces the Lunima/akhetonics-desktop crash: caller asks to
+        derive from `dev`, but the local clone only has `origin/dev` as a
+        remote-tracking ref. create() must transparently fall back to
+        `origin/dev` instead of exploding with 'invalid reference: dev'.
+        """
+        # Build a fake remote with a `dev` branch.
+        remote = tmp_path / "remote.git"
+        seed = tmp_path / "seed"
+        subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "--bare",
+                        str(remote)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(remote), str(seed)],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=seed, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=seed, check=True)
+        subprocess.run(["git", "checkout", "-b", "main"], cwd=seed, check=True,
+                       capture_output=True)
+        (seed / "README.md").write_text("hi\n")
+        subprocess.run(["git", "add", "."], cwd=seed, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=seed, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "checkout", "-b", "dev"], cwd=seed, check=True,
+                       capture_output=True)
+        (seed / "dev-only.txt").write_text("on dev\n")
+        subprocess.run(["git", "add", "."], cwd=seed, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "dev"], cwd=seed, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "push", "origin", "dev"], cwd=seed, check=True,
+                       capture_output=True)
+
+        # The main checkout that the agent uses: clones the remote, sits on
+        # `main`, has `origin/dev` only as a remote-tracking ref.
+        main_clone = tmp_path / "main-clone"
+        subprocess.run(["git", "clone", str(remote), str(main_clone)],
+                       check=True, capture_output=True)
+
+        # Sanity: `dev` is NOT a local branch in the main clone.
+        local_dev = subprocess.run(
+            ["git", "rev-parse", "--verify", "dev"],
+            cwd=main_clone, capture_output=True, text=True,
+        )
+        assert local_dev.returncode != 0
+
+        wt_root = tmp_path / "worktrees"
+        mgr = WorktreeManager(worktree_root=wt_root)
+
+        # The failing call — pre-fix it raised RuntimeError. Now it should
+        # silently resolve `dev` → `origin/dev`.
+        path = mgr.create(
+            repo_path=main_clone,
+            branch="agent/issue-254",
+            base="dev",
+        )
+
+        assert path.is_dir()
+        # Worktree must have started from the dev tip, so dev-only.txt is there.
+        assert (path / "dev-only.txt").is_file()
+
     def test_list_marks_detached_head(self, repo, tmp_path):
         """A detached-HEAD worktree should be listed with branch='(detached)'."""
         import subprocess

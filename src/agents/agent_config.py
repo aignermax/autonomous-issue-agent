@@ -42,6 +42,10 @@ class ProjectConfig:
     agents_enabled: list[str] = field(default_factory=lambda: ["coder"])
     # Optional: command timeout in seconds for build/test runs.
     command_timeout_sec: int = 1800
+    # Opt-in: run a Claude-based PR review after mechanical build/test pass.
+    # Off by default — costs API tokens and only makes sense once mechanical
+    # gating is stable for the repo.
+    qa_review_enabled: bool = False
 
     @property
     def has_build(self) -> bool:
@@ -87,6 +91,7 @@ def load_project_config(repo_root: Path) -> ProjectConfig:
         tech_stack=_as_str_list(raw.get("tech_stack", [])),
         agents_enabled=_as_str_list(raw.get("agents_enabled", ["coder"])) or ["coder"],
         command_timeout_sec=int(raw.get("command_timeout_sec", 1800)),
+        qa_review_enabled=bool(raw.get("qa_review_enabled", False)),
     )
 
 

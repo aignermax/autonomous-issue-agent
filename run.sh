@@ -7,8 +7,12 @@ echo "🤖 Starting Autonomous Issue Agent"
 echo ""
 
 # Add development tools to PATH
+# - $HOME/.dotnet           dotnet build / test
+# - $HOME/.dotnet/tools     dotnet global tools
+# - $HOME/.npm-global/bin   codegraph (MCP server binary)
+# - $HOME/.cargo/bin        rustup-installed toolchains
 export DOTNET_ROOT="$HOME/.dotnet"
-export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.npm-global/bin:$HOME/.dotnet:$HOME/.dotnet/tools:$HOME/.cargo/bin:$PATH"
 
 # Check if WSL venv exists (for WSL environment)
 if [ -d "wsl-venv" ]; then

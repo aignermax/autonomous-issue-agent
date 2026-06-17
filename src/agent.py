@@ -3,9 +3,10 @@ Autonomous Issue Agent - Main orchestration with multi-session support.
 """
 
 import os
+import re
+import subprocess
 import time
 import logging
-import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -588,7 +589,7 @@ class Agent:
             branch = self._claim_issue_and_create_branch(issue)
 
         worktree_path = self.worktrees.create(
-            repo_path=self.config.local_path,
+            repo_path=self.git.path,
             branch=branch,
             base=self.git.get_working_branch(),
         )
@@ -751,10 +752,20 @@ class Agent:
         reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode)
         base_branch = self.git.default_branch
 
-        for round_num in range(1, self.config.max_review_rounds + 1):
+        _, _, complexity = self._detect_issue_complexity(issue)
+        max_rounds = (
+            self.config.max_review_rounds_complex
+            if complexity == "COMPLEX"
+            else self.config.max_review_rounds_regular
+        )
+        log.info(
+            f"Review loop: complexity={complexity}, max_rounds={max_rounds} "
+            f"for PR #{pr.number}"
+        )
+
+        for round_num in range(1, max_rounds + 1):
             log.info(
-                f"Review round {round_num}/{self.config.max_review_rounds} "
-                f"for PR #{pr.number}"
+                f"Review round {round_num}/{max_rounds} for PR #{pr.number}"
             )
             result = reviewer.review(
                 issue=issue, pr=pr, branch=branch,
@@ -764,12 +775,12 @@ class Agent:
                 log.info(f"Reviewer verdict OK on round {round_num} — done")
                 return False
 
-            if round_num == self.config.max_review_rounds:
+            if round_num == max_rounds:
                 log.warning(
-                    f"Max review rounds reached ({self.config.max_review_rounds}); "
+                    f"Max review rounds reached ({max_rounds}); "
                     f"flagging PR #{pr.number}"
                 )
-                self._flag_for_human(issue, pr, result)
+                self._flag_for_human(issue, pr, result, max_rounds)
                 return True
 
             # Retry: rerun worker with reviewer findings in prompt
@@ -800,7 +811,7 @@ class Agent:
 
         return False  # unreachable, but keeps type stable
 
-    def _flag_for_human(self, issue, pr, result) -> None:
+    def _flag_for_human(self, issue, pr, result, max_rounds: int) -> None:
         """Add `needs-human` label and post escalation comment."""
         try:
             issue.add_to_labels("needs-human")
@@ -808,11 +819,157 @@ class Agent:
             log.error(f"Could not add needs-human label — human will not see escalation: {e}")
         try:
             pr.create_issue_comment(
-                f"Reached max review rounds ({self.config.max_review_rounds}) "
+                f"Reached max review rounds ({max_rounds}) "
                 f"with BLOCKING findings remaining. Last summary: {result.summary}"
             )
         except Exception as e:
             log.error(f"Could not post escalation comment: {e}")
+
+    # ------------------------------------------------------------------
+    # QA-fix feedback loop (Phase 2)
+    # ------------------------------------------------------------------
+
+    def _check_qa_failed_prs(self) -> bool:
+        """Run a fix pass on the oldest open PR currently labeled qa-failed.
+
+        Returns:
+            True if a PR was processed this cycle, False otherwise. Caller
+            uses the bool to decide whether to also scan for new issues.
+        """
+        if self.github is None:
+            return False
+        try:
+            prs = self.github.find_qa_failed_prs()
+        except Exception as e:
+            log.warning(f"Could not list qa-failed PRs: {e}")
+            return False
+        if not prs:
+            return False
+
+        pr = prs[0]
+        log.info(f"Found qa-failed PR #{pr.number}: {pr.title}")
+        try:
+            self._run_qa_fix(pr)
+        except Exception:
+            log.exception(f"QA-fix flow crashed for PR #{pr.number}")
+        return True
+
+    def _run_qa_fix(self, pr) -> None:
+        """Drive Claude through a fix attempt on a qa-failed PR."""
+        from .prompt_template import build_qa_fix_prompt
+
+        max_rounds = self.config.max_qa_fix_rounds
+        failures = self.github.count_qa_failures(pr)
+        if failures >= max_rounds:
+            log.warning(
+                f"PR #{pr.number} has {failures} QA failures (>= {max_rounds}); "
+                "escalating to human."
+            )
+            try:
+                pr.add_to_labels("needs-human")
+                pr.create_issue_comment(
+                    f"Reached max QA-fix rounds ({max_rounds}). "
+                    "Escalating to human for review."
+                )
+            except Exception as e:
+                log.error(f"Could not escalate PR #{pr.number}: {e}")
+            self.github.remove_pr_label(pr, "qa-failed")
+            return
+
+        branch = pr.head.ref
+        issue = self._find_issue_for_pr(pr)
+
+        # Make sure local main checkout has the latest objects so worktree
+        # creation can derive from a fresh base.
+        self.git.ensure_cloned()
+        worktree_path = self.worktrees.create(
+            repo_path=self.git.path,
+            branch=branch,
+            base=self.git.get_working_branch(),
+        )
+        worktree_git = GitRepo(
+            path=worktree_path,
+            remote_url=self.git.remote_url,
+            default_branch=self.git.default_branch,
+        )
+        # Align worktree with the latest origin state of the PR branch.
+        worktree_git.run("fetch", "origin", branch)
+        worktree_git.run("checkout", branch)
+        worktree_git.run("reset", "--hard", f"origin/{branch}")
+        worktree_git.run("clean", "-fdx")
+
+        qa_comment = self.github.get_latest_qa_comment(pr) or ""
+        qa_summary, qa_details = self._split_qa_comment(qa_comment)
+
+        tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
+        tools_python = (
+            str(self.config.tools_python) if self.config.tools_python else "python3"
+        )
+        prompt = build_qa_fix_prompt(
+            issue=issue, pr=pr, branch=branch,
+            qa_summary=qa_summary, qa_details=qa_details,
+            tools_dir=tools_dir, tools_python=tools_python,
+        )
+
+        if issue is not None:
+            max_turns, _, _ = self._detect_issue_complexity(issue)
+        else:
+            max_turns = self.config.max_turns_regular
+
+        worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+        log.info(f"Running QA-fix worker for PR #{pr.number} (round {failures + 1}/{max_rounds})")
+        try:
+            output, reached_max, usage = worker.execute(prompt)
+        except Exception as e:
+            log.exception(f"Claude failed during QA-fix for PR #{pr.number}: {e}")
+            return
+        if reached_max:
+            log.warning(f"QA-fix worker reached max turns on PR #{pr.number}")
+
+        # Push any new commits the worker produced.
+        try:
+            worktree_git.commit_and_push(
+                branch=branch,
+                message=f"QA fix: address verdict on PR #{pr.number}",
+                base_branch=self.github.default_branch,
+            )
+        except Exception as e:
+            log.error(f"Push failed during QA-fix for PR #{pr.number}: {e}")
+            return
+
+        # Hand the PR back to QA. Removing qa-failed tells QA to re-evaluate.
+        self.github.remove_pr_label(pr, "qa-failed")
+        log.info(
+            f"QA-fix pass complete on PR #{pr.number}; qa-failed label removed, "
+            "QA will rerun on next cycle."
+        )
+
+    def _find_issue_for_pr(self, pr):
+        """Extract the linked issue number from the PR body and fetch it.
+
+        The bot's PR body always contains `Automated implementation for #<n>`,
+        so a single `#<digits>` lookup is sufficient. Returns None if the
+        link is missing or the issue is unreachable.
+        """
+        body = pr.body or ""
+        m = re.search(r"#(\d+)", body)
+        if not m:
+            return None
+        try:
+            return self.github.repo.get_issue(int(m.group(1)))
+        except Exception as e:
+            log.warning(f"Could not fetch linked issue for PR #{pr.number}: {e}")
+            return None
+
+    @staticmethod
+    def _split_qa_comment(comment: str) -> tuple[str, str]:
+        """Split a `[qa-agent]` comment into its first line (summary) and rest."""
+        if not comment:
+            return ("", "")
+        lines = comment.splitlines()
+        summary = lines[0] if lines else ""
+        rest = "\n".join(lines[1:]).strip()
+        return summary, rest
 
     def _setup_for_repo(self, repo_name: str) -> None:
         """
@@ -841,6 +998,36 @@ class Agent:
         self.claude = ClaudeCode(local_path, self.config.max_turns)
         log.info(f"Setup complete for {repo_name} → {local_path}")
 
+        self._sync_codegraph_index(local_path)
+
+    @staticmethod
+    def _sync_codegraph_index(repo_path: Path) -> None:
+        """Keep the CodeGraph index in sync with the latest main-clone state.
+
+        Worktrees symlink `.codegraph/` from the main checkout, so a single
+        sync here keeps every worker's view current. Silently skipped when
+        codegraph isn't installed or the repo isn't indexed — the agent
+        must keep working either way.
+        """
+        if not (repo_path / ".codegraph").is_dir():
+            return
+        try:
+            result = subprocess.run(
+                ["codegraph", "sync", str(repo_path)],
+                capture_output=True, text=True, timeout=60,
+            )
+        except FileNotFoundError:
+            log.debug("codegraph not on PATH — skipping sync")
+            return
+        except subprocess.TimeoutExpired:
+            log.warning(f"codegraph sync timed out for {repo_path}")
+            return
+        if result.returncode != 0:
+            log.warning(
+                f"codegraph sync failed for {repo_path} "
+                f"(rc={result.returncode}): {result.stderr.strip()[:200]}"
+            )
+
     def run_once(self) -> None:
         """
         Check ONE repository for issues and process if found (with auto-continuation).
@@ -867,6 +1054,16 @@ class Agent:
 
         log.info(f"Checking repository: {repo_name}")
         self._setup_for_repo(repo_name)
+
+        # Phase 2: prioritize fixing QA-failed PRs over starting new work.
+        # If we processed one this cycle, defer the new-issue scan to the
+        # next rotation step so we don't pile up half-baked work.
+        if self._check_qa_failed_prs():
+            log.info(
+                f"Processed a qa-failed PR in {repo_name}; "
+                "skipping new-issue scan this cycle"
+            )
+            return
 
         issue = self.github.find_next_issue(self.config.issue_label)
         if not issue:
@@ -1140,13 +1337,13 @@ class Agent:
         """
         for repo_name in self.config.repo_names:
             self._setup_for_repo(repo_name)
-            for wt in self.worktrees.list(self.config.local_path):
+            for wt in self.worktrees.list(self.git.path):
                 if not wt.branch.startswith(self.config.branch_prefix):
                     continue
                 pr = self.github.get_pr_by_branch(wt.branch)
                 if pr is None:
                     log.info(f"No open PR for {wt.branch} — removing worktree")
-                    self.worktrees.remove(self.config.local_path, wt.branch)
+                    self.worktrees.remove(self.git.path, wt.branch)
 
     def run_forever(self) -> None:
         """Poll loop — runs until killed."""

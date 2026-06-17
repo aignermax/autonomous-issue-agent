@@ -28,8 +28,8 @@ class TestConfig:
         assert config.complexity_tag == "complex"
         assert config.max_turns_regular == 150
         assert config.max_turns_complex == 500
-        assert config.max_tokens_regular == 8000000
-        assert config.max_tokens_complex == 15000000
+        assert config.max_tokens_regular == 20000000
+        assert config.max_tokens_complex == 50000000
         # Default should be regular limits
         assert config.max_turns == 150
 
@@ -112,11 +112,13 @@ class TestConfig:
         monkeypatch.setenv("GITHUB_TOKEN", "t")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
         c = Config()
-        assert c.max_review_rounds == 2
+        assert c.max_review_rounds_regular == 1
+        assert c.max_review_rounds_complex == 2
+        assert c.max_review_rounds == 2  # legacy alias = complex default
         assert c.reviewer_model_default == "claude-sonnet-4-6"
         assert c.reviewer_model_critical == "claude-opus-4-7"
         assert c.critical_label == "critical"
-        assert c.reviewer_max_turns == 50
+        assert c.reviewer_max_turns == 80
 
     def test_reviewer_overrides(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "t")
@@ -124,5 +126,17 @@ class TestConfig:
         monkeypatch.setenv("AGENT_MAX_REVIEW_ROUNDS", "4")
         monkeypatch.setenv("AGENT_REVIEWER_MODEL", "x")
         c = Config()
+        # Legacy override applies to both flavors when set
         assert c.max_review_rounds == 4
+        assert c.max_review_rounds_regular == 4
+        assert c.max_review_rounds_complex == 4
         assert c.reviewer_model_default == "x"
+
+    def test_reviewer_rounds_per_complexity(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("AGENT_MAX_REVIEW_ROUNDS_REGULAR", "0")
+        monkeypatch.setenv("AGENT_MAX_REVIEW_ROUNDS_COMPLEX", "3")
+        c = Config()
+        assert c.max_review_rounds_regular == 0
+        assert c.max_review_rounds_complex == 3

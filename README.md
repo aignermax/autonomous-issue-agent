@@ -311,8 +311,8 @@ Simply double-click `start.bat` in the repository root (Windows). This will:
 **For Linux/Mac Users:**
 
 ```bash
-# Run with dashboard (recommended)
-./dashboard_interactive.sh
+# Run with dashboard (recommended) — starts agent + dashboard
+./run.sh
 ```
 
 ### 7. Interactive Dashboard
@@ -321,7 +321,7 @@ The interactive dashboard provides full agent control with a clean interface:
 
 **Windows:** Double-click **[start.bat](start.bat)** in the repository root
 
-**Linux/Mac:** Run `./dashboard_interactive.sh`
+**Linux/Mac:** Run `./run.sh`
 
 **Dashboard Commands:**
 - `[g]` Start Agent - Launch agent in continuous mode

@@ -156,3 +156,52 @@ class GitHubClient:
             comment: Comment text
         """
         issue.create_comment(comment)
+
+    def find_qa_failed_prs(
+        self, label: str = "qa-failed", title_prefix: str = "Agent:"
+    ) -> list:
+        """Return open coder-style PRs currently flagged as qa-failed.
+
+        Filtered by `title_prefix` so we don't try to fix PRs the agent
+        didn't author. Sorted oldest-first to match the rest of the
+        scheduling policy.
+        """
+        wanted_label = label.lower()
+        result = []
+        for pr in self.repo.get_pulls(state="open", sort="created", direction="asc"):
+            if not pr.title.startswith(title_prefix):
+                continue
+            labels = {(getattr(l, "name", "") or "").lower() for l in (pr.labels or [])}
+            if wanted_label in labels:
+                result.append(pr)
+        return result
+
+    def get_latest_qa_comment(self, pr) -> Optional[str]:
+        """Return the most recent `[qa-agent]` verdict comment body, if any."""
+        latest = None
+        try:
+            for c in pr.get_issue_comments():
+                body = c.body or ""
+                if body.startswith("[qa-agent]"):
+                    latest = body
+        except Exception as e:
+            log.warning(f"Could not read comments on PR #{pr.number}: {e}")
+        return latest
+
+    def count_qa_failures(self, pr) -> int:
+        """Count how many times QA has marked this PR FAILED."""
+        n = 0
+        try:
+            for c in pr.get_issue_comments():
+                if (c.body or "").startswith("[qa-agent] **FAILED**"):
+                    n += 1
+        except Exception as e:
+            log.warning(f"Could not count QA failures on PR #{pr.number}: {e}")
+        return n
+
+    def remove_pr_label(self, pr, label: str) -> None:
+        """Remove a label from a PR, swallowing 'not found' errors."""
+        try:
+            pr.remove_from_labels(label)
+        except Exception as e:
+            log.warning(f"Could not remove '{label}' from PR #{pr.number}: {e}")

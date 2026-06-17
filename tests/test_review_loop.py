@@ -13,7 +13,12 @@ class TestRunReviewLoop:
         from src.agent import Agent
         agent = Agent.__new__(Agent)
         agent.config = MagicMock()
+        # Tests treat the legacy `max_review_rounds` as the per-complexity
+        # value; the loop derives rounds from complexity, so we mirror it
+        # on both flavors to keep test intent stable across configs.
         agent.config.max_review_rounds = max_review_rounds
+        agent.config.max_review_rounds_regular = max_review_rounds
+        agent.config.max_review_rounds_complex = max_review_rounds
         agent.config.tools_dir = Path("/tmp/tools")
         agent.config.tools_python = Path("/tmp/venv/bin/python3")
         agent.config.reviewer_model_default = "sonnet"

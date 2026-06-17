@@ -149,14 +149,25 @@ def build_prompt(issue, state=None, repo_name=None, tools_dir: str = "tools",
 **You have access to ALL dependency repositories at:**
 `/mnt/c/Users/MaxAigner/akhetonics-workspace/`
 
-**Available repos:** akhetonics-desktop, raycore-sdk, raycore-ISA, raycore-Assembler, Lunima
+**Available repos:**
+- `akhetonics-desktop/` — this project
+- `SAPPHIRE-Compiler/` — the compiler (raycore-isa and raycore-assembler are also pulled in as submodules; top-level copies live alongside)
+- `raycore-isa/` — instruction-set definition consumed by the compiler
+- `raycore-assembler/` — assembler consumed by the compiler
+- `phridge-blades-simulator/` — blade simulator belonging to the ISA stack
+- `Phridge-Dispatcher/` — dispatcher belonging to the ISA stack
+- `raycore-vulkan-icd/` — Vulkan ICD (vulkan-raycore-ICD)
+- `raycore-vulkan-layer/` — Vulkan implicit layer
+- `Lunima/` — photonic simulation tool
 
-**When you need NuGet package source code:**
-1. Use `tools/semantic_search.py --path /mnt/c/Users/MaxAigner/akhetonics-workspace --query "your search"`
-2. Check raycore-sdk/ for Raycore SDK implementations
-3. Look in related repos for examples and patterns
-4. **DO NOT waste tokens guessing** - the source code is available locally!
-"""
+**When you need NuGet-consumed source code, or need to understand a
+type/function that lives in one of these packages instead of in this
+repo:**
+1. Use `{tools_python} {tools_dir}/semantic_search.py --path /mnt/c/Users/MaxAigner/akhetonics-workspace --query "your search"`
+2. Or scope to a specific dep, e.g. `--path /mnt/c/Users/MaxAigner/akhetonics-workspace/SAPPHIRE-Compiler`
+3. `{tools_python} {tools_dir}/find_symbol.py SymbolName` also accepts `--path`
+4. **DO NOT waste tokens guessing** — the source code is available locally!
+""".format(tools_dir=tools_dir, tools_python=tools_python)
 
     if state and state.session_count > 0:
         recent_notes = "\n".join(state.notes[-5:]) if state.notes else "No notes yet."
@@ -268,6 +279,131 @@ will re-run automatically.
 
 {issue_body}
 """
+
+
+QA_REVIEW_TEMPLATE = """You are a QA reviewer running on a PR after build/test
+have already passed mechanically. Verify the PR diff is actually shippable.
+
+## PR
+**Number:** #{pr_number}
+**Branch:** `{branch}` (base `{base_branch}`)
+**Title:** {pr_title}
+
+## Your Job
+1. Read CLAUDE.md / AGENTS.md if present for project conventions.
+2. Inspect the diff:
+   ```bash
+   git diff origin/{base_branch}...origin/{branch}
+   ```
+3. Optional deeper inspection:
+   ```bash
+   {tools_python} {tools_dir}/semantic_search.py "your query"
+   {tools_python} {tools_dir}/find_symbol.py SymbolName
+   ```
+4. Check for, in order:
+   - Correctness bugs (off-by-one, null deref, unhandled error paths,
+     resource leaks)
+   - Tests: do new code paths have tests? Do tests assert real behaviour
+     vs. just calling the API?
+   - Architecture: hard rules from CLAUDE.md violated?
+   - Security: input validation gaps, secret logging, path traversal,
+     command injection
+   - Scope creep: changes unrelated to the PR's stated purpose
+
+## Output Format — STRICT
+
+End your review with EXACTLY this block (parsed by tooling):
+
+```
+=== REVIEW RESULT ===
+VERDICT: <OK | BLOCKING>
+SUMMARY: <one sentence>
+=== FINDINGS ===
+- [SEVERITY] <file:line> — <issue> — <suggested fix>
+- [SEVERITY] <file:line> — <issue> — <suggested fix>
+=== END ===
+```
+
+Severity levels: BLOCKING (must fix), NIT (suggestion). Use BLOCKING only
+for real correctness/security/spec issues — not style.
+
+If verdict is OK, the FINDINGS list may be empty.
+
+DO NOT modify any files. DO NOT commit. Read-only review."""
+
+
+def build_qa_review_prompt(pr, branch: str, base_branch: str,
+                           tools_dir: str = "tools",
+                           tools_python: str = "python3") -> str:
+    """Build the QA-reviewer prompt for a given PR.
+
+    Unlike the implementation Reviewer, this one is PR-centric and does not
+    require an Issue object — QA may run against PRs whose linking issue is
+    stale or absent.
+    """
+    return QA_REVIEW_TEMPLATE.format(
+        pr_number=pr.number,
+        pr_title=getattr(pr, "title", ""),
+        branch=branch,
+        base_branch=base_branch,
+        tools_dir=tools_dir,
+        tools_python=tools_python,
+    )
+
+
+QA_FIX_TEMPLATE = """A previous QA pass on PR #{pr_number} (branch
+`{branch}`) FAILED. Fix the issues described below and push to the same
+branch — QA will rerun automatically.
+
+## Original Issue
+**#{issue_number}: {issue_title}**
+
+{issue_body}
+
+## QA Verdict (latest)
+{qa_summary}
+
+## QA Failure Details
+{qa_details}
+
+## Your Task
+1. Read CLAUDE.md for project conventions.
+2. Reproduce the failure locally if it is a build/test failure:
+   ```bash
+   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
+   {tools_python} {tools_dir}/smart_test.py
+   ```
+3. Address EVERY BLOCKING finding above. NIT findings are optional.
+4. Add or update tests so the failure can't reappear silently.
+5. Commit and push to branch `{branch}`. Do NOT open a new PR — the
+   existing one (#{pr_number}) will pick the new commits up.
+
+Do not refactor unrelated code. Keep the diff focused on the QA failure.
+"""
+
+
+def build_qa_fix_prompt(issue, pr, branch: str, qa_summary: str,
+                        qa_details: str, tools_dir: str = "tools",
+                        tools_python: str = "python3") -> str:
+    """Build a fix prompt for a coder retrying after QA failure.
+
+    `issue` may be None when the linked issue could not be resolved; in
+    that case we fall back to the PR title for context.
+    """
+    issue_number = issue.number if issue is not None else "?"
+    issue_title = issue.title if issue is not None else getattr(pr, "title", "")
+    issue_body = (issue.body if issue is not None else "") or "No description provided."
+    return QA_FIX_TEMPLATE.format(
+        issue_number=issue_number,
+        issue_title=issue_title,
+        issue_body=issue_body,
+        pr_number=pr.number,
+        branch=branch,
+        qa_summary=qa_summary or "(no summary provided)",
+        qa_details=qa_details or "(no detail block provided)",
+        tools_dir=tools_dir,
+        tools_python=tools_python,
+    )
 
 
 def build_retry_prompt(issue, branch: str, review, tools_dir: str,

@@ -107,10 +107,12 @@ class TestGitHubClient:
         mock_issue1 = Mock()
         mock_issue1.number = 123
         mock_issue1.pull_request = None  # Not a PR
+        mock_issue1.assignees = []
 
         mock_issue2 = Mock()
         mock_issue2.number = 124
         mock_issue2.pull_request = None
+        mock_issue2.assignees = []
 
         mock_github_api['repo'].get_issues.return_value = [mock_issue1, mock_issue2]
 
@@ -134,10 +136,12 @@ class TestGitHubClient:
         mock_pr = Mock()
         mock_pr.number = 123
         mock_pr.pull_request = Mock()  # Has pull_request attribute
+        mock_pr.assignees = []
 
         mock_issue = Mock()
         mock_issue.number = 124
         mock_issue.pull_request = None
+        mock_issue.assignees = []
 
         mock_github_api['repo'].get_issues.return_value = [mock_pr, mock_issue]
 

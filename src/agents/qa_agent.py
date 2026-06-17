@@ -18,14 +18,16 @@ import logging
 import os
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ..config import Config
 from ..git_repo import GitRepo
 from ..github_client import GitHubClient
+from ..reviewer import ReviewResult
 from .agent_config import ProjectConfig, load_project_config
+from .qa_review import QAReviewer
 
 log = logging.getLogger("agent")
 
@@ -60,13 +62,26 @@ class QAResult:
     steps: list[StepResult]
     overall_passed: bool
     error: str = ""
+    review: Optional[ReviewResult] = None
 
 
 class QAAgent:
     """Polling QA worker. Mirrors the structure of the coder Agent class."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config,
+                 claude_factory: Optional[Callable] = None):
+        """
+        Args:
+            config: Config instance.
+            claude_factory: Callable returning a ClaudeCode-like object.
+                Defaults to the real `ClaudeCode` class. Tests inject a stub
+                so the QA review path can be exercised without a real CLI.
+        """
         self.config = config
+        if claude_factory is None:
+            from ..claude_code import ClaudeCode
+            claude_factory = ClaudeCode
+        self.claude_factory = claude_factory
         self.github: Optional[GitHubClient] = None
         self.git: Optional[GitRepo] = None
         self.current_repo_name: Optional[str] = None
@@ -150,10 +165,23 @@ class QAAgent:
             )
 
         steps = self._run_steps(project_cfg)
-        overall_passed = all(s.passed or not s.ran for s in steps) and any(s.ran for s in steps)
+        mechanical_passed = (
+            all(s.passed or not s.ran for s in steps)
+            and any(s.ran for s in steps)
+        )
+
+        # Run the Claude PR review only if (a) the repo has opted in, and
+        # (b) the mechanical gate already passed — there's no point burning
+        # tokens on a tree we already know is broken.
+        review: Optional[ReviewResult] = None
+        if mechanical_passed and project_cfg.qa_review_enabled:
+            review = self._run_qa_review(pr, branch)
+
+        review_blocking = bool(review and review.has_blocking)
+        overall_passed = mechanical_passed and not review_blocking
 
         verdict_label = LABEL_PASSED if overall_passed else LABEL_FAILED
-        self._post_verdict(pr, steps, overall_passed)
+        self._post_verdict(pr, steps, overall_passed, review)
         self._release_pr(pr, verdict_label=verdict_label)
 
         return QAResult(
@@ -161,6 +189,7 @@ class QAAgent:
             branch=branch,
             steps=steps,
             overall_passed=overall_passed,
+            review=review,
         )
 
     def _claim_pr(self, pr) -> None:
@@ -260,10 +289,36 @@ class QAAgent:
         )
 
     # ------------------------------------------------------------------
+    # Claude review
+    # ------------------------------------------------------------------
+
+    def _run_qa_review(self, pr, branch: str) -> Optional[ReviewResult]:
+        """Invoke the Claude QA reviewer; never raise into the caller."""
+        assert self.git is not None
+        try:
+            reviewer = QAReviewer(self.config, claude_factory=self.claude_factory)
+            return reviewer.review(
+                pr=pr,
+                branch=branch,
+                base_branch=self.git.default_branch,
+                worktree_path=self.git.path,
+            )
+        except Exception as e:
+            log.exception(f"[qa] review step crashed for PR #{pr.number}")
+            # Fail-safe: a crashed review is BLOCKING — refuse to pass a PR
+            # we couldn't actually inspect.
+            return ReviewResult(
+                verdict="BLOCKING",
+                summary=f"QA review crashed: {e}",
+                raw_output="",
+            )
+
+    # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
-    def _post_verdict(self, pr, steps: list[StepResult], passed: bool) -> None:
+    def _post_verdict(self, pr, steps: list[StepResult], passed: bool,
+                      review: Optional[ReviewResult] = None) -> None:
         header = "[qa-agent] **PASSED**" if passed else "[qa-agent] **FAILED**"
         lines = [header, ""]
         for step in steps:
@@ -279,6 +334,16 @@ class QAAgent:
                     lines.append("```")
                     lines.append(tail)
                     lines.append("```")
+
+        if review is not None:
+            lines.append("")
+            lines.append(f"### Claude review: **{review.verdict}**")
+            if review.summary:
+                lines.append(review.summary)
+            if review.findings:
+                lines.append("")
+                for f in review.findings:
+                    lines.append(f"- **[{f.severity}]** {f.text}")
 
         try:
             pr.create_issue_comment("\n".join(lines))

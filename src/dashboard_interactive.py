@@ -199,6 +199,30 @@ class InteractiveDashboard(BaseDashboard):
             else:
                 python_cmd = "venv/bin/python3"
 
+            # Build the env the spawned agent will inherit. Inject
+            # $HOME/.dotnet (Linux dotnet SDK) and $HOME/.dotnet/tools into
+            # PATH so build_errors.py / smart_test.py and any subprocess
+            # `dotnet ...` call resolves. Subprocesses inherit only the env
+            # we pass, so without this they get the dashboard's PATH (which
+            # has /mnt/c/Program Files/dotnet/ for .exe interop but no
+            # Linux `dotnet`).
+            env = os.environ.copy()
+            home = os.path.expanduser("~")
+            # Prepend toolchains we expect on the worker's PATH:
+            # - $HOME/.dotnet for `dotnet build` / `dotnet test`
+            # - $HOME/.npm-global/bin for `codegraph` (MCP server binary)
+            extra_paths = [
+                os.path.join(home, ".npm-global", "bin"),
+                os.path.join(home, ".dotnet"),
+                os.path.join(home, ".dotnet", "tools"),
+            ]
+            existing = env.get("PATH", "")
+            for p in reversed(extra_paths):
+                if p not in existing.split(os.pathsep):
+                    existing = p + os.pathsep + existing
+            env["PATH"] = existing
+            env.setdefault("DOTNET_ROOT", os.path.join(home, ".dotnet"))
+
             if sys.platform == 'win32':
                 # Windows: use CREATE_NEW_PROCESS_GROUP
                 subprocess.Popen(
@@ -206,6 +230,7 @@ class InteractiveDashboard(BaseDashboard):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     cwd=self.monitor.working_dir,
+                    env=env,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
                 )
             else:
@@ -216,6 +241,7 @@ class InteractiveDashboard(BaseDashboard):
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
                     cwd=self.monitor.working_dir,
+                    env=env,
                     start_new_session=True
                 )
 
