@@ -44,6 +44,34 @@ trailing"""
         assert r.verdict == "BLOCKING"
         assert "could not parse" in r.summary.lower()
 
+    def test_parse_ui_prefixed_finding(self):
+        """`[UI]` prefix on the finding text must not confuse severity parsing.
+
+        The QA-review prompt instructs the reviewer to write visual findings
+        as ``- [BLOCKING] [UI] <file:line> — ...``. The severity bracket is
+        what `_FINDING_LINE` keys off; the `[UI]` token must survive intact
+        in the finding text so downstream consumers can tell visual issues
+        from code issues.
+        """
+        out = """
+=== REVIEW RESULT ===
+VERDICT: BLOCKING
+SUMMARY: Visual regression in the right panel.
+=== FINDINGS ===
+- [BLOCKING] [UI] MainWindow.axaml:42 — Parameter Sweep panel renders empty — verify ItemsControl binding
+- [NIT] [UI] MainWindow.axaml:50 — labels misaligned — tweak padding
+=== END ===
+"""
+        r = parse_review_output(out)
+        assert r.verdict == "BLOCKING"
+        assert r.has_blocking is True
+        assert len(r.findings) == 2
+        assert r.findings[0].severity == "BLOCKING"
+        assert r.findings[0].text.startswith("[UI] ")
+        assert "Parameter Sweep panel renders empty" in r.findings[0].text
+        assert r.findings[1].severity == "NIT"
+        assert r.findings[1].text.startswith("[UI] ")
+
 
 class TestReviewer:
     def _make_config(self):
