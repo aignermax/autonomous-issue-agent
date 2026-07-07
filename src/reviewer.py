@@ -4,7 +4,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Literal
+from typing import Callable, List, Literal, Optional
 
 log = logging.getLogger("agent")
 
@@ -66,17 +66,20 @@ def parse_review_output(output: str) -> ReviewResult:
 class Reviewer:
     """Runs Claude Code in review mode against a PR diff."""
 
-    def __init__(self, config, github, claude_factory: Callable):
+    def __init__(self, config, github, claude_factory: Callable, usage_sink: Optional[Callable] = None):
         """
         Args:
             config: Config instance (for model/label settings).
             github: GitHubClient (for PR comments).
             claude_factory: Callable that returns a ClaudeCode-like object;
                             in production this is the ClaudeCode class itself.
+            usage_sink: Optional callable forwarded to the reviewer's ClaudeCode
+                        so its token usage is counted by the usage guardrail.
         """
         self.config = config
         self.github = github
         self.claude_factory = claude_factory
+        self.usage_sink = usage_sink
 
     def _select_model(self, issue) -> str:
         labels = {(getattr(label, "name", "") or "").lower() for label in (issue.labels or [])}
@@ -105,6 +108,8 @@ class Reviewer:
             working_dir=worktree_path,
             max_turns=self.config.reviewer_max_turns,
             model=model,
+            effort=self.config.effort,
+            usage_sink=self.usage_sink,
         )
         output, _maxed, usage = claude.execute(prompt)
         result = parse_review_output(output)

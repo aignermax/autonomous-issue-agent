@@ -107,10 +107,12 @@ class TestGitHubClient:
         mock_issue1 = Mock()
         mock_issue1.number = 123
         mock_issue1.pull_request = None  # Not a PR
+        mock_issue1.assignees = []       # Unassigned (not locked by another agent)
 
         mock_issue2 = Mock()
         mock_issue2.number = 124
         mock_issue2.pull_request = None
+        mock_issue2.assignees = []
 
         mock_github_api['repo'].get_issues.return_value = [mock_issue1, mock_issue2]
 
@@ -138,6 +140,7 @@ class TestGitHubClient:
         mock_issue = Mock()
         mock_issue.number = 124
         mock_issue.pull_request = None
+        mock_issue.assignees = []
 
         mock_github_api['repo'].get_issues.return_value = [mock_pr, mock_issue]
 
@@ -146,6 +149,30 @@ class TestGitHubClient:
 
         # Should skip PR and return issue
         assert issue == mock_issue
+
+    def test_find_next_issue_skips_assigned(self, mock_github_api, monkeypatch):
+        """Assigned issues are locked by another agent and must be skipped."""
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+        assignee = Mock()
+        assignee.login = "bot"
+        assigned = Mock()
+        assigned.number = 200
+        assigned.pull_request = None
+        assigned.assignees = [assignee]  # already locked
+
+        free = Mock()
+        free.number = 201
+        free.pull_request = None
+        free.assignees = []
+
+        mock_github_api['repo'].get_issues.return_value = [assigned, free]
+
+        client = GitHubClient("owner/repo")
+        issue = client.find_next_issue("agent-task")
+
+        # Should skip the assigned (locked) issue and return the free one
+        assert issue == free
 
     def test_find_next_issue_none_found(self, mock_github_api, monkeypatch):
         """Test find_next_issue returns None when no issues found."""

@@ -12,7 +12,7 @@ import shutil
 import platform
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 from dataclasses import dataclass
 
 log = logging.getLogger("agent")
@@ -97,21 +97,77 @@ def find_claude_cli() -> str:
     )
 
 
+class UsageLimitError(RuntimeError):
+    """Raised when the Claude CLI reports a subscription usage/rate limit was hit.
+
+    ``reset_at`` is an epoch timestamp if a reset time could be parsed from the
+    CLI message, else None (caller applies a default backoff).
+    """
+
+    def __init__(self, message: str, reset_at: Optional[float] = None):
+        super().__init__(message)
+        self.reset_at = reset_at
+
+
+# Substrings that indicate the subscription 5h/weekly limit (or a hard rate
+# limit) was hit. Matched case-insensitively against CLI stdout/stderr.
+_USAGE_LIMIT_MARKERS = (
+    "usage limit reached",
+    "reached your usage limit",
+    "5-hour limit",
+    "five-hour limit",
+    "weekly limit",
+    "limit will reset",
+    "limit resets",
+    "resets at",
+    "claude usage limit",
+    "quota exceeded",
+    "429 too many requests",
+)
+
+
+def detect_usage_limit(text: str) -> Optional[float]:
+    """If ``text`` signals a usage/rate limit, return a reset epoch (or 0.0 if a
+    limit is detected but no reset time could be parsed). Return None otherwise."""
+    if not text:
+        return None
+    low = text.lower()
+    if not any(m in low for m in _USAGE_LIMIT_MARKERS):
+        return None
+    # Best-effort "resets in N hour(s)/minute(s)" parse; fall back to 0.0.
+    import re
+    import time as _time
+    m = re.search(r"reset[s]?\s+in\s+(\d+)\s*(hour|hr|minute|min)", low)
+    if m:
+        n = int(m.group(1))
+        secs = n * 3600 if m.group(2).startswith(("hour", "hr")) else n * 60
+        return _time.time() + secs
+    return 0.0
+
+
 class ClaudeCode:
     """Runs Claude Code CLI in headless mode."""
 
-    def __init__(self, working_dir: Path, max_turns: int = 300, model: Optional[str] = None):
+    def __init__(self, working_dir: Path, max_turns: int = 300, model: Optional[str] = None,
+                 effort: Optional[str] = None, usage_sink: Optional[Callable] = None):
         """
         Initialize Claude Code runner.
 
         Args:
             working_dir: Directory where Claude Code should execute
             max_turns: Maximum number of tool call turns
-            model: Optional model override (e.g. "claude-opus-4-7"). None = CLI default.
+            model: Optional model override (e.g. "claude-opus-4-8"). None = CLI default.
+            effort: Optional reasoning effort level passed to `--effort`
+                (low, medium, high, xhigh, max). None = CLI default.
+            usage_sink: Optional callable invoked with the UsageStats of each run
+                (used by the rolling 5h/7d usage guardrail). Exceptions from it
+                are swallowed so accounting never breaks a run.
         """
         self.working_dir = working_dir
         self.max_turns = max_turns
         self.model = model
+        self.effort = effort
+        self.usage_sink = usage_sink
         self.claude_cli = find_claude_cli()
         self._verify_installation()
 
@@ -136,13 +192,27 @@ class ClaudeCode:
         except subprocess.TimeoutExpired:
             raise RuntimeError("Claude CLI verification timed out")
 
-    def execute(self, prompt: str, resume_file: Optional[Path] = None) -> Tuple[str, bool, UsageStats]:
+    def execute(
+        self,
+        prompt: str,
+        resume_file: Optional[Path] = None,
+        on_heartbeat: Optional[Callable[[int, int], None]] = None,
+        heartbeat_interval_sec: int = 300,
+    ) -> Tuple[str, bool, UsageStats]:
         """
         Run a prompt through Claude Code in headless JSON mode with activity monitoring.
 
         Args:
             prompt: The prompt to execute
             resume_file: Optional state file to resume from previous session
+            on_heartbeat: Optional callable invoked every `heartbeat_interval_sec`
+                while the subprocess is alive. Signature:
+                    on_heartbeat(elapsed_sec, idle_sec)
+                Exceptions from the callback are caught and logged — they never
+                interrupt the run.
+            heartbeat_interval_sec: Minimum seconds between heartbeat callbacks
+                (default 300 = 5 min). The first heartbeat fires no sooner than
+                this many seconds after the subprocess starts.
 
         Returns:
             Tuple of (output string, reached_max_turns, usage_stats)
@@ -161,6 +231,9 @@ class ClaudeCode:
         if self.model:
             cmd.extend(["--model", self.model])
 
+        if self.effort:
+            cmd.extend(["--effort", self.effort])
+
         # Add resume flag if continuing from previous session
         if resume_file and resume_file.exists():
             cmd.extend(["--resume", str(resume_file)])
@@ -170,6 +243,12 @@ class ClaudeCode:
         import os
         env = os.environ.copy()
         env['BROWSER'] = 'echo'  # Prevent Claude Code from opening browser windows (use echo instead of /bin/true to avoid errors)
+        # Force OAuth-only auth: scrub any API keys so the CLI and any sub-tools
+        # cannot fall back to per-token API billing under any circumstance.
+        # This is a 24/7-service safety belt — see feedback memory aia-no-api-key.
+        env.pop('ANTHROPIC_API_KEY', None)
+        env.pop('ANTHROPIC_AUTH_TOKEN', None)
+        env.pop('OPENAI_API_KEY', None)
 
         process = subprocess.Popen(
             cmd,
@@ -184,7 +263,9 @@ class ClaudeCode:
         # We check multiple signals: CPU usage, file changes, and process state
         max_inactivity = 1800  # 30 minutes (longer to allow for thinking/analysis time)
         check_interval = 60  # Check every minute
-        last_activity_time = time.time()
+        process_start_time = time.time()
+        last_activity_time = process_start_time
+        last_heartbeat_time = process_start_time
         last_mtime = self._get_repo_last_modified_time()
         consecutive_idle_checks = 0
 
@@ -223,13 +304,27 @@ class ClaudeCode:
                 # psutil not available or process check failed
                 log.debug(f"Could not check CPU (psutil not available or process gone): {e}")
 
+            # Compute inactivity duration up-front so logging and the kill check agree
+            now = time.time()
+            inactivity_duration = now - last_activity_time
+
             # Log idle status periodically (every 5 checks = 5 minutes)
             if not activity_detected and consecutive_idle_checks % 5 == 0:
                 idle_mins = int(inactivity_duration / 60)
                 log.info(f"Claude Code idle for {idle_mins} min ({consecutive_idle_checks} checks)")
 
-            # Check for inactivity timeout
-            inactivity_duration = time.time() - last_activity_time
+            # Heartbeat callback. Fires at most once per heartbeat_interval_sec
+            # and only while the subprocess is still alive. Callback exceptions
+            # are swallowed — never let a flaky observer take down the agent.
+            if on_heartbeat is not None and now - last_heartbeat_time >= heartbeat_interval_sec:
+                try:
+                    on_heartbeat(
+                        int(now - process_start_time),
+                        int(inactivity_duration),
+                    )
+                except Exception as cb_err:
+                    log.warning(f"on_heartbeat callback raised, ignoring: {cb_err}")
+                last_heartbeat_time = now
 
             # Only kill if BOTH conditions met:
             # 1. No activity for max_inactivity seconds
@@ -257,9 +352,21 @@ class ClaudeCode:
 
         if result.returncode != 0:
             log.error(f"Claude Code failed: {result.stderr[:500]}")
+            reset_at = detect_usage_limit(f"{result.stderr}\n{result.stdout}")
+            if reset_at is not None:
+                raise UsageLimitError(
+                    "Claude CLI reported a subscription usage/rate limit", reset_at=reset_at
+                )
             raise RuntimeError(f"Claude Code exit code {result.returncode}")
 
         output = result.stdout
+
+        # Rare: limit reported on an otherwise-successful invocation.
+        reset_at = detect_usage_limit(output)
+        if reset_at is not None:
+            raise UsageLimitError(
+                "Claude CLI reported a subscription usage/rate limit", reset_at=reset_at
+            )
 
         # Parse JSON response to extract result and usage
         try:
@@ -288,6 +395,11 @@ class ClaudeCode:
             f"Token usage: {usage.total_tokens:,} tokens, "
             f"Estimated cost: ${usage.estimated_cost_usd:.4f}"
         )
+        if self.usage_sink is not None:
+            try:
+                self.usage_sink(usage)
+            except Exception as sink_err:
+                log.warning(f"usage_sink raised, ignoring: {sink_err}")
         return actual_output, reached_max_turns, usage
 
     def _get_repo_last_modified_time(self) -> float:
@@ -411,6 +523,12 @@ class ClaudeCode:
             "--permission-mode", "bypassPermissions",
         ]
 
+        if self.model:
+            cmd.extend(["--model", self.model])
+
+        if self.effort:
+            cmd.extend(["--effort", self.effort])
+
         # Add MCP config if available
         if has_mcp:
             cmd.extend(["--mcp-config", str(mcp_config)])
@@ -431,6 +549,10 @@ class ClaudeCode:
             import os
             env = os.environ.copy()
             env['BROWSER'] = 'echo'  # Prevent Claude Code from opening browser windows (use echo instead of /bin/true to avoid errors)
+            # Force OAuth-only auth (same rationale as execute()).
+            env.pop('ANTHROPIC_API_KEY', None)
+            env.pop('ANTHROPIC_AUTH_TOKEN', None)
+            env.pop('OPENAI_API_KEY', None)
 
             process = subprocess.Popen(
                 cmd,

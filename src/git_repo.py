@@ -13,7 +13,8 @@ log = logging.getLogger("agent")
 class GitRepo:
     """Handles all local git operations."""
 
-    def __init__(self, path: Path, remote_url: str, default_branch: str = "main"):
+    def __init__(self, path: Path, remote_url: str, default_branch: str = "main",
+                 author_name: Optional[str] = None, author_email: Optional[str] = None):
         """
         Initialize Git repository handler.
 
@@ -21,10 +22,21 @@ class GitRepo:
             path: Local path to the repository
             remote_url: Git remote URL (HTTPS or SSH)
             default_branch: Default branch name (e.g., "dev", "main", "master")
+            author_name: Author name to set on the local clone (for `git commit`).
+                Falls back to env AGENT_GIT_USER_NAME, then "Autonomous Issue Agent".
+            author_email: Author email to set on the local clone.
+                Falls back to env AGENT_GIT_USER_EMAIL, then "aia-bot@local".
         """
+        import os
         self.path = path
         self.remote_url = remote_url
         self.default_branch = default_branch
+        self.author_name = (author_name
+                            or os.environ.get("AGENT_GIT_USER_NAME")
+                            or "Autonomous Issue Agent")
+        self.author_email = (author_email
+                             or os.environ.get("AGENT_GIT_USER_EMAIL")
+                             or "aia-bot@local")
 
     def run(self, *args: str) -> subprocess.CompletedProcess:
         """
@@ -46,6 +58,16 @@ class GitRepo:
             log.warning(f"git {' '.join(args)}: {result.stderr.strip()}")
         return result
 
+    @property
+    def _masked_remote(self) -> str:
+        """remote_url with any embedded HTTP basic-auth credentials masked.
+
+        Used in logs so that GitHub PATs embedded in `https://<token>@…` clone
+        URLs do not end up in agent.log / journalctl / conversation transcripts.
+        """
+        import re
+        return re.sub(r'(https?://)[^@/\s]+@', r'\1***@', self.remote_url)
+
     def ensure_cloned(self) -> None:
         """
         Clone repository if not exists, otherwise pull latest changes.
@@ -53,7 +75,7 @@ class GitRepo:
         Ensures repository is in clean state before pulling to avoid conflicts.
         """
         if not (self.path / ".git").exists():
-            log.info(f"Cloning {self.remote_url} ...")
+            log.info(f"Cloning {self._masked_remote} ...")
             subprocess.run(
                 ["git", "clone", self.remote_url, str(self.path)],
                 check=True,
@@ -61,6 +83,12 @@ class GitRepo:
                 text=True,
             )
         else:
+            # Re-sync the remote URL with the current env token. The token is
+            # embedded in remote.origin.url at clone time; if the user later
+            # rotates the PAT, every fetch fails with "could not read Password"
+            # until we update it. set-url is idempotent and cheap.
+            self.run("remote", "set-url", "origin", self.remote_url)
+
             # CRITICAL: Clean any uncommitted changes first to avoid conflicts
             self._ensure_clean_state()
 
@@ -87,6 +115,17 @@ class GitRepo:
                     log.error(f"Failed to reset to origin/{working_branch}")
                     raise RuntimeError(f"Failed to reset to remote: {reset_result.stderr}")
                 log.info(f"Successfully reset local repository to origin/{working_branch}")
+
+        # Always (re-)set local author identity so `git commit` can succeed
+        # without a system-wide user.name/user.email. Idempotent.
+        self._configure_identity()
+
+    def _configure_identity(self) -> None:
+        """Set local user.name and user.email on this clone so `git commit`
+        does not fail with 'Author identity unknown'. Local config only — does
+        not touch the user's global git config."""
+        self.run("config", "user.name", self.author_name)
+        self.run("config", "user.email", self.author_email)
 
     def _ensure_clean_state(self) -> None:
         """
@@ -138,20 +177,32 @@ class GitRepo:
         has_uncommitted = bool(status.stdout.strip())
 
         if has_uncommitted:
-            # Commit the changes
-            self.run("commit", "-m", message)
+            # Commit the changes. CRITICAL: check returncode — git can fail
+            # silently (e.g. "Author identity unknown") and we must not push
+            # nothing-new and then create a doomed PR.
+            commit_result = self.run("commit", "-m", message)
+            if commit_result.returncode != 0:
+                raise RuntimeError(
+                    f"git commit failed (exit {commit_result.returncode}): "
+                    f"{commit_result.stderr.strip() or commit_result.stdout.strip()}"
+                )
             log.info("Changes committed.")
         else:
             log.info("No uncommitted changes in working directory.")
 
-        # Check if there are unpushed commits (e.g., from Claude Code)
-        # Compare local branch with remote
-        result = self.run("rev-list", "--count", f"origin/{branch}..{branch}")
-        if result.returncode != 0:
-            # Remote branch doesn't exist yet - we have commits to push
-            unpushed_count = 1
-        else:
-            unpushed_count = int(result.stdout.strip() or "0")
+        # Decide whether there's anything new to push. Compare against the
+        # base branch (origin/<base>) — that's the right reference for "does
+        # this branch carry commits worth pushing?". We deliberately do NOT
+        # fall back to `unpushed_count = 1` when origin/<branch> is missing:
+        # that historically caused empty branches to be pushed (and PRs to
+        # 422 with "No commits between") whenever a commit failed silently.
+        ahead = self.run("rev-list", "--count", f"origin/{base_branch}..{branch}")
+        if ahead.returncode != 0:
+            raise RuntimeError(
+                f"git rev-list origin/{base_branch}..{branch} failed "
+                f"(exit {ahead.returncode}): {ahead.stderr.strip()}"
+            )
+        unpushed_count = int(ahead.stdout.strip() or "0")
 
         if unpushed_count > 0:
             log.info(f"Found {unpushed_count} unpushed commit(s), pushing to origin...")
@@ -215,11 +266,13 @@ class GitRepo:
         return True
 
     def cleanup(self) -> None:
-        """Return to working branch."""
-        # Only cleanup if repository exists
+        """Return to working branch — no-op if already there or if branch is
+        checked out in another worktree (git would refuse with a fatal error)."""
         if not (self.path / ".git").exists():
             return
         working_branch = self.get_working_branch()
+        if self.get_current_branch() == working_branch:
+            return  # already on it
         self.run("checkout", working_branch)
 
     def branch_exists(self, branch: str) -> bool:

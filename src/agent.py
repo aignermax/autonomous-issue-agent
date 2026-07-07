@@ -12,12 +12,13 @@ from typing import Optional
 
 from .config import Config
 from .git_repo import GitRepo
-from .claude_code import ClaudeCode
+from .claude_code import ClaudeCode, UsageLimitError
 from .github_client import GitHubClient
 from .reviewer import Reviewer, ReviewResult
 from .session_state import SessionManager, SessionState
 from .test_gate import TestGate
 from .tools_bootstrap import ensure_tools_installed
+from .usage_limiter import UsageLimiter
 from .worktree import WorktreeManager
 
 log = logging.getLogger("agent")
@@ -53,6 +54,13 @@ class Agent:
         self.current_repo_name = None  # Track current repository being worked on
         self.session_manager = SessionManager(config.session_dir)
         self.worktrees = WorktreeManager(worktree_root=config.worktree_dir)
+        # Rolling 5h/7d usage guardrail for the Claude subscription. record_usage
+        # is handed to every ClaudeCode/Reviewer as their usage_sink so all token
+        # consumption (worker, retries, reviewer) lands in one ledger.
+        self.limiter = UsageLimiter(
+            config.usage_ledger_path, config.limit_5h_tokens, config.limit_7d_tokens
+        )
+        self._last_block_log = 0.0  # throttle "paused" log lines
         # Bootstrap python-dev-tools and expose path for prompts
         try:
             install = ensure_tools_installed()
@@ -265,33 +273,51 @@ class Agent:
         """
         issue_num = issue.number
 
-        # LOCK the issue by removing the activation label AND assigning to self
+        import socket
+        hostname = socket.gethostname()
+        bot_login = self.github.repo.owner.login
+
+        # LOCK the issue. Assignment (the durable cross-agent lock) and label
+        # removal are INDEPENDENT operations, each in its own try/except: a
+        # failure in one must never skip the other. Previously a single try
+        # wrapped both, so a transient GitHub 404/5xx on label removal aborted
+        # the whole claim — leaving the issue unassigned AND still labelled, so
+        # the next poll cycle re-picked and re-ran it (duplicate PR + spend).
+        log.info(f"Claiming issue #{issue_num}")
+
+        # 1. Assign to repo owner FIRST. This is the persistent lock that
+        #    survives crashes and coordinates multiple agents (find_next_issue
+        #    skips assigned issues). If already ours, a prior claim was
+        #    interrupted — resume it and skip the duplicate claim comment.
+        already_claimed = False
         try:
-            log.info(f"Claiming issue #{issue_num} by removing '{self.config.issue_label}' label")
+            already_claimed = any(a.login == bot_login for a in issue.assignees)
+            if already_claimed:
+                log.info(f"Issue #{issue_num} already assigned to {bot_login}; resuming prior claim")
+            else:
+                issue.add_to_assignees(bot_login)
+                log.info(f"Assigned issue #{issue_num} to {bot_login} for persistent lock")
+        except Exception as assign_error:
+            log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
+            log.warning("Falling back to label-removal lock only (less reliable for multi-agent)")
+
+        # 2. Remove the activation label so the issue is no longer polled as
+        #    pending. Independent of assignment — a failure here still leaves
+        #    the assignment lock in place.
+        try:
             issue.remove_from_labels(self.config.issue_label)
-            log.info(f"Issue #{issue_num} locked (label removed)")
+            log.info(f"Issue #{issue_num} locked (label '{self.config.issue_label}' removed)")
+        except Exception as label_error:
+            log.warning(f"Could not remove '{self.config.issue_label}' label from issue #{issue_num}: {label_error}")
+            log.warning("Assignment lock still applies; issue stays skipped while assigned")
 
-            import socket
-            hostname = socket.gethostname()
-
-            # Try to assign issue to current user (persistent lock across agents)
+        # 3. Post a claim comment (cosmetic — never block the run on it).
+        if not already_claimed:
             try:
-                # Get current authenticated user
-                user = self.github.repo.organization or self.github.repo.owner
-                username = self.github.repo._requester._Requester__auth._Auth__token  # Get auth info
-                # Assign to current user - this persists even if agent crashes
-                issue.add_to_assignees(self.github.repo.owner.login)
-                log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login} for persistent lock")
-            except Exception as assign_error:
-                log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
-                log.warning("Lock will only be via label removal (less reliable for multi-agent)")
-
-            issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
-            log.info(f"Posted claim comment with hostname: {hostname}")
-        except Exception as e:
-            log.warning(f"Could not remove label or post comment on issue #{issue_num}: {e}")
-            log.warning("This might indicate expired GitHub token or permission issue")
-            log.warning("Continuing anyway, but other agents might pick this up too")
+                issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
+                log.info(f"Posted claim comment with hostname: {hostname}")
+            except Exception as comment_error:
+                log.warning(f"Could not post claim comment on issue #{issue_num}: {comment_error}")
 
         # Determine branch name
         target_branch = self._extract_branch_from_issue(issue)
@@ -582,6 +608,12 @@ class Agent:
         # stored in the existing session state; for a new session we claim the
         # issue now and derive a fresh branch name.
         issue_num = issue.number
+
+        # Local clone must exist before any `git -C` calls or worktree creation.
+        # _setup_for_repo only constructs the GitRepo object; the actual `git clone`
+        # is deferred to here so that polling cycles with no work skip the I/O.
+        self.git.ensure_cloned()
+
         existing_state = self.session_manager.load_state(issue_num)
         if existing_state:
             branch = existing_state.branch_name
@@ -589,7 +621,7 @@ class Agent:
             branch = self._claim_issue_and_create_branch(issue)
 
         worktree_path = self.worktrees.create(
-            repo_path=self.config.local_path,
+            repo_path=self.git.path,
             branch=branch,
             base=self.git.get_working_branch(),
         )
@@ -601,7 +633,9 @@ class Agent:
             remote_url=self.git.remote_url,
             default_branch=self.git.default_branch,
         )
-        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns,
+                                     model=self.config.worker_model, effort=self.config.effort,
+                                     usage_sink=self.record_usage)
 
         original_git, original_claude = self.git, self.claude
         self.git, self.claude = worktree_git, worktree_claude
@@ -667,7 +701,23 @@ class Agent:
 
             # Step 3: Build prompt and execute Claude Code
             prompt = self._build_prompt(issue, state if state.session_count > 0 else None)
-            output, reached_max_turns, usage = self.claude.execute(prompt)
+
+            # Heartbeat: while the Worker subprocess is alive, post a comment
+            # every 5 min so the issue page shows progress without requiring
+            # the operator to check the journal. Exceptions in the callback
+            # are swallowed inside ClaudeCode.execute() and never affect the run.
+            def _worker_heartbeat(elapsed_sec: int, idle_sec: int) -> None:
+                mins = max(1, elapsed_sec // 60)
+                idle_min = idle_sec // 60
+                idle_note = "actively working" if idle_min < 1 else f"last activity {idle_min} min ago"
+                self.github.add_issue_comment(
+                    issue,
+                    f"⏱️ Worker still running — {mins} min elapsed, {idle_note}.",
+                )
+
+            output, reached_max_turns, usage = self.claude.execute(
+                prompt, on_heartbeat=_worker_heartbeat,
+            )
             log.info(f"Claude Code output:\n{output[:1000]}...")
 
             # Update session stats
@@ -677,6 +727,22 @@ class Agent:
                 cost=usage.estimated_cost_usd
             )
             state.last_output = output[:5000]
+
+            # Post a single "Worker done" comment so the issue page shows where
+            # we are in the pipeline (next phase is commit -> Reviewer -> PR).
+            done_note = (
+                f"✅ Worker round {state.session_count} finished — "
+                f"{usage.total_tokens:,} tokens"
+            )
+            if reached_max_turns:
+                done_note += (
+                    f" (hit max-turns limit of {self.config.max_turns}; "
+                    f"will continue in next session)"
+                )
+            try:
+                self.github.add_issue_comment(issue, done_note)
+            except Exception as comment_err:
+                log.warning(f"Worker-done comment failed: {comment_err}")
 
             # Step 4a: Check if token budget exceeded
             if state.total_tokens > self.config.max_tokens_per_issue:
@@ -734,6 +800,10 @@ class Agent:
             log.info(f"PR created: {pr_url}")
             return IssueResult(success=True, branch=branch, pr_url=pr_url)
 
+        except UsageLimitError:
+            # A subscription usage/rate limit is not a per-issue failure — let it
+            # propagate to run_once so the guardrail can pause new pickups.
+            raise
         except Exception as e:
             # Handle any errors
             return self._handle_error(issue, state, branch, e)
@@ -753,7 +823,8 @@ class Agent:
         """
         from .prompt_template import build_retry_prompt
 
-        reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode)
+        reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode,
+                            usage_sink=self.record_usage)
         gate = TestGate(self.config)
         base_branch = self.git.default_branch
 
@@ -806,7 +877,9 @@ class Agent:
                 tools_dir=tools_dir, tools_python=tools_python,
             )
             max_turns, _, _ = self._detect_issue_complexity(issue)
-            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns,
+                                model=self.config.worker_model, effort=self.config.effort,
+                                usage_sink=self.record_usage)
             log.info(f"Re-running worker for round {round_num + 1}")
             _output, reached_max, _usage = worker.execute(retry_prompt)
             if reached_max:
@@ -874,8 +947,14 @@ class Agent:
         repo_slug = repo_name.replace("/", "_")
         local_path = self.config.local_path.parent / f"repo_{repo_slug}"
         self.git = GitRepo(local_path, remote, self.github.default_branch)
-        self.claude = ClaudeCode(local_path, self.config.max_turns)
+        self.claude = ClaudeCode(local_path, self.config.max_turns,
+                                 model=self.config.worker_model, effort=self.config.effort,
+                                 usage_sink=self.record_usage)
         log.info(f"Setup complete for {repo_name} → {local_path}")
+
+    def record_usage(self, usage) -> None:
+        """usage_sink for ClaudeCode/Reviewer — feed a run's tokens to the guardrail."""
+        self.limiter.record(usage.total_tokens)
 
     def run_once(self) -> None:
         """
@@ -895,6 +974,18 @@ class Agent:
 
         This reduces API calls from N repos/cycle to 1 repo/cycle.
         """
+        # Usage guardrail: before starting ANY new work, check the rolling 5h/7d
+        # budget and reactive-backoff state. If blocked, don't claim/start a new
+        # issue this cycle (in-flight work already finished — this only gates new
+        # pickups). Throttle the log so a long pause doesn't spam the journal.
+        block_reason = self.limiter.blocked()
+        if block_reason:
+            now = time.time()
+            if now - self._last_block_log >= 300:
+                log.warning(f"Usage guardrail active — skipping new issues: {block_reason}")
+                self._last_block_log = now
+            return
+
         num_repos = len(self.config.repo_names)
 
         # Round-robin: check ONLY the next repo in rotation
@@ -914,7 +1005,20 @@ class Agent:
         # Process with auto-continuation
         max_sessions = 20  # Prevent infinite loops (20 sessions × 500 turns = 10,000 turns max)
         for session in range(max_sessions):
-            result = self.process_issue(issue)
+            try:
+                result = self.process_issue(issue)
+            except UsageLimitError as e:
+                # Claude reported a real usage/rate limit mid-run. Back off new
+                # pickups until the reset (or a default) and stop this cycle;
+                # session state is persisted so work can resume once freed.
+                reset_at = e.reset_at if e.reset_at else time.time() + self.config.limit_backoff_seconds
+                self.limiter.pause_until(reset_at)
+                mins = int((reset_at - time.time()) / 60) + 1
+                log.warning(
+                    f"Claude usage limit hit on issue #{issue.number}; pausing new "
+                    f"work ~{mins} min until reset."
+                )
+                break
 
             if result.success:
                 log.info(f"Issue #{issue.number} done → {result.pr_url}")

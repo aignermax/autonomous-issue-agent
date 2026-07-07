@@ -54,16 +54,19 @@ class TestConfig:
         assert config.complexity_tag == "hard"
 
     def test_validate_missing_tokens(self, monkeypatch):
-        """Test validation with missing tokens."""
-        # Clear env vars
+        """Only GITHUB_TOKEN is required.
+
+        ANTHROPIC_API_KEY is intentionally not validated — the agent calls the
+        Claude Code CLI, which authenticates via OAuth (`claude login`) against
+        a Claude Pro/Max subscription.
+        """
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
         config = Config()
         missing = config.validate()
 
-        assert "GITHUB_TOKEN" in missing
-        assert "ANTHROPIC_API_KEY" in missing
+        assert missing == ["GITHUB_TOKEN"]
 
     def test_validate_complete(self, monkeypatch):
         """Test validation with all required tokens."""
@@ -111,10 +114,15 @@ class TestConfig:
     def test_reviewer_defaults(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "t")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.delenv("AGENT_WORKER_MODEL", raising=False)
+        monkeypatch.delenv("AGENT_EFFORT", raising=False)
+        monkeypatch.delenv("AGENT_REVIEWER_MODEL_CRITICAL", raising=False)
         c = Config()
         assert c.max_review_rounds == 2
+        assert c.worker_model == "claude-opus-4-8"
+        assert c.effort == "xhigh"
         assert c.reviewer_model_default == "claude-sonnet-4-6"
-        assert c.reviewer_model_critical == "claude-opus-4-7"
+        assert c.reviewer_model_critical == "claude-opus-4-8"
         assert c.critical_label == "critical"
         assert c.reviewer_max_turns == 50
 

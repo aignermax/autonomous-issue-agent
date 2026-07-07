@@ -40,12 +40,29 @@ class Config:
         self.tools_dir: Optional[Path] = None
         self.tools_python: Optional[Path] = None
 
+        # Worker (implementer) model + reasoning effort. Applied to every
+        # ClaudeCode session across all repos. Default to the best model at
+        # maximum practical effort; override via env for cheaper runs.
+        self.worker_model: str = os.environ.get("AGENT_WORKER_MODEL", "claude-opus-4-8")
+        self.effort: str = os.environ.get("AGENT_EFFORT", "xhigh")
+
+        # Usage guardrail — rolling token budgets protecting the Claude
+        # subscription's 5-hour and 7-day limits. The agent pauses picking up
+        # NEW issues once a window's budget is reached (in-flight work finishes),
+        # and also backs off if the CLI reports a real limit. Set 0 to disable a
+        # window. These are conservative starting points — TUNE to your plan.
+        self.limit_5h_tokens: int = int(os.environ.get("AGENT_LIMIT_5H_TOKENS", "40000000"))
+        self.limit_7d_tokens: int = int(os.environ.get("AGENT_LIMIT_7D_TOKENS", "250000000"))
+        # Fallback backoff when the CLI reports a limit but gives no reset time.
+        self.limit_backoff_seconds: int = int(os.environ.get("AGENT_LIMIT_BACKOFF_SECONDS", "3600"))
+        self.usage_ledger_path: Path = self.session_dir / "usage-ledger.json"
+
         # Reviewer settings
         self.max_review_rounds: int = int(os.environ.get("AGENT_MAX_REVIEW_ROUNDS", "2"))
         self.reviewer_model_default: str = os.environ.get(
             "AGENT_REVIEWER_MODEL", "claude-sonnet-4-6")
         self.reviewer_model_critical: str = os.environ.get(
-            "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-7")
+            "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-8")
         self.critical_label: str = os.environ.get("AGENT_CRITICAL_LABEL", "critical")
         self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "50"))
 
@@ -83,10 +100,14 @@ class Config:
         ).expanduser()
 
     def validate(self) -> list[str]:
-        """Validate required configuration. Returns list of missing variables."""
+        """Validate required configuration. Returns list of missing variables.
+
+        ANTHROPIC_API_KEY is intentionally not required: this agent shells out to
+        the Claude Code CLI, which authenticates via OAuth (`claude login`)
+        against a Claude Pro/Max subscription. Setting ANTHROPIC_API_KEY can make
+        the CLI prefer per-token API billing over the subscription.
+        """
         missing = []
         if not self.github_token:
             missing.append("GITHUB_TOKEN")
-        if not self.anthropic_api_key:
-            missing.append("ANTHROPIC_API_KEY")
         return missing
