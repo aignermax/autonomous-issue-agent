@@ -12,7 +12,7 @@ import shutil
 import platform
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
 
 log = logging.getLogger("agent")
@@ -105,8 +105,10 @@ def find_claude_cli() -> str:
 class ClaudeCode:
     """Runs Claude Code CLI in headless mode."""
 
+    _BUNDLED_SETTINGS = object()
+
     def __init__(self, working_dir: Path, max_turns: int = 300, model: Optional[str] = None,
-                 settings_file: Optional[Path] = None):
+                 settings_file=_BUNDLED_SETTINGS):
         """
         Initialize Claude Code runner.
 
@@ -115,42 +117,68 @@ class ClaudeCode:
             max_turns: Maximum number of tool call turns
             model: Optional model override (e.g. "claude-opus-4-7"). None = CLI default.
             settings_file: Claude Code settings JSON passed via --settings.
-                Defaults to the bundled commit-hygiene settings; skipped if missing.
+                Defaults to the bundled commit-hygiene settings. A missing or
+                malformed file raises, because the CLI silently ignores broken
+                settings and the agent would run unenforced. Pass None to run
+                without settings deliberately.
         """
         self.working_dir = working_dir
         self.max_turns = max_turns
         self.model = model
-        self.settings_file = settings_file if settings_file is not None else default_settings_path()
+        if settings_file is ClaudeCode._BUNDLED_SETTINGS:
+            settings_file = default_settings_path()
+        self.settings_file: Optional[Path] = settings_file
+        if self.settings_file is not None:
+            self._validate_settings_file(self.settings_file)
         self.claude_cli = find_claude_cli()
         self._verify_installation()
 
-    def _settings_args(self) -> list:
-        if self.settings_file.exists():
-            return ["--settings", str(self.settings_file)]
-        log.warning(f"Claude settings file not found, running without hooks: {self.settings_file}")
-        return []
+    @staticmethod
+    def _validate_settings_file(path: Path) -> None:
+        """Fail fast on settings the CLI would silently ignore (verified: exit 0, no stderr)."""
+        if not path.exists():
+            raise FileNotFoundError(f"Claude settings file not found: {path}")
+        import json
+        data = json.loads(path.read_text())
+        if not data.get("hooks"):
+            raise ValueError(f"Claude settings file defines no hooks: {path}")
 
-    def _build_headless_cmd(self, prompt: str, resume_file: Optional[Path] = None) -> list:
+    def _settings_args(self) -> List[str]:
+        """--settings flag, or empty when settings were disabled via settings_file=None."""
+        if self.settings_file is None:
+            return []
+        return ["--settings", str(self.settings_file)]
+
+    def _resume_args(self, resume_file: Optional[Path]) -> List[str]:
+        """--resume flag for an existing session file."""
+        if resume_file is None:
+            return []
+        if not resume_file.exists():
+            log.warning(f"Resume file not found, starting fresh session: {resume_file}")
+            return []
+        log.info(f"Resuming from session file: {resume_file}")
+        return ["--resume", str(resume_file)]
+
+    def _build_headless_cmd(self, prompt: str, resume_file: Optional[Path] = None) -> List[str]:
+        """Command line for one-shot JSON mode."""
         cmd = [
             self.claude_cli,
             "-p", prompt,
             "--output-format", "json",
             "--max-turns", str(self.max_turns),
             "--dangerously-skip-permissions",
-            "--debug", "api"  # Enable API debug logging to capture all token usage
+            "--debug", "api"  # captures per-call token usage for cost accounting
         ]
         cmd.extend(self._settings_args())
 
         if self.model:
             cmd.extend(["--model", self.model])
 
-        if resume_file and resume_file.exists():
-            cmd.extend(["--resume", str(resume_file)])
-            log.info(f"Resuming from session file: {resume_file}")
-
+        cmd.extend(self._resume_args(resume_file))
         return cmd
 
-    def _build_interactive_cmd(self, resume_file: Optional[Path] = None) -> list:
+    def _build_interactive_cmd(self, resume_file: Optional[Path] = None) -> List[str]:
+        """Command line for PTY mode. No -p flag: the prompt is typed into the TTY."""
         cmd = [
             self.claude_cli,
             "--max-turns", str(self.max_turns),
@@ -163,10 +191,7 @@ class ClaudeCode:
             cmd.extend(["--mcp-config", str(mcp_config)])
             log.info(f"Using MCP config (interactive mode): {mcp_config}")
 
-        if resume_file and resume_file.exists():
-            cmd.extend(["--resume", str(resume_file)])
-            log.info(f"Resuming from session file: {resume_file}")
-
+        cmd.extend(self._resume_args(resume_file))
         return cmd
 
     def _verify_installation(self) -> None:
@@ -439,7 +464,6 @@ class ClaudeCode:
         Returns:
             Tuple of (output string, reached_max_turns, usage_stats)
         """
-        # Build command - NO -p flag for interactive mode!
         cmd = self._build_interactive_cmd(resume_file)
 
         log.info("Invoking Claude Code in interactive mode with PTY...")

@@ -204,6 +204,11 @@ REVIEWER_TEMPLATE = """You are a senior code reviewer. Review PR #{pr_number} fo
    - Does the diff actually solve the issue's acceptance criteria?
    - Are there obvious correctness bugs (off-by-one, null deref, unhandled error paths)?
    - Tests: do they exist for new logic? Do they assert real behaviour, not just call shape?
+   - Comment hygiene: added lines must not contain WHAT-comments (restating the code) or
+     change-justification comments ("now handles X correctly") — rationale belongs in the
+     commit message. Treat violations as BLOCKING despite being stylistic: repo policy,
+     and this check is the backstop for the commit-time hook. WHY-comments, license
+     headers and public API doc comments are fine.
    - Architecture: does it follow CLAUDE.md? Hard rules violated?
    - Security: any input validation gaps, secret logging, path traversal?
 
