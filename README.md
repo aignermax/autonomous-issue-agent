@@ -105,6 +105,18 @@ PR ready for human merge
 **Cleanup:** `python main.py --cleanup-worktrees` removes worktrees for
 branches without an open PR.
 
+**Commit hygiene hook:** every Claude Code invocation (Worker and Reviewer)
+runs with `--settings config/claude-settings.json`, which installs a
+PostToolUse hook: after a `git commit` a small verifier agent inspects the
+commit for explanatory WHAT-comments and change-justification comments
+(those belong in the commit message, not the code) and instructs the agent
+to remove them and amend. WHY-comments, license headers and public API doc
+comments are allowed. The agent fails fast at startup if the settings file
+is missing or malformed, because the CLI silently ignores broken settings.
+Hook execution itself is fail-open (a timed-out or errored hook does not
+undo the commit), so the Reviewer role independently blocks PRs on the same
+comment rules as a backstop.
+
 **Tools:** the agent auto-installs `python-dev-tools` into `~/.cap-tools/`
 on first run (via the upstream `install.sh`), including a venv with the
 runtime dependencies (`openai`, `python-dotenv`) that `semantic_search.py`
