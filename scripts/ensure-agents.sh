@@ -23,7 +23,9 @@ for u in "${UNITS[@]}"; do
 done
 # Anchored match (^) — cmdline must BE the agent, not merely mention it
 # (an unanchored pattern once matched the invoking shell and killed it).
-for pid in $(pgrep -f "^python3 main\.py" 2>/dev/null); do
+# Any python path counts: dashboard-spawned strays run as
+# "wsl-venv/bin/python3 main.py", units as "python3 main.py".
+for pid in $(pgrep -f "^[^ ]*python[0-9.]* main\.py" 2>/dev/null); do
     [ "$pid" = "$$" ] && continue
     if ! grep -qw "$pid" <<<"$unit_pids"; then
         echo "[ensure-agents] stoppe verwaisten Agent-Prozess $pid (nicht systemd-verwaltet)"

@@ -192,10 +192,14 @@ class DashboardMonitor:
                             pid = proc_info['pid']
                             # Convert create_time (timestamp) to datetime
                             start_time = datetime.fromtimestamp(proc_info['create_time'])
+                            # Role = value after --role (qa, pr-feedback, ...);
+                            # no flag = coder. Unknown roles must NOT fall back
+                            # to "coder" — that once showed pr-feedback as a
+                            # duplicate coder and the user killed the agents.
                             role = "coder"
                             for i, a in enumerate(cmdline):
-                                if a == "--role" and i + 1 < len(cmdline) and cmdline[i + 1] == "qa":
-                                    role = "qa"
+                                if a == "--role" and i + 1 < len(cmdline):
+                                    role = cmdline[i + 1]
                                     break
                             agents.append((pid, start_time, role))
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -231,7 +235,8 @@ class DashboardMonitor:
                                 start_str = ' '.join(parts[1:6])
                                 # Detect role from the rest of the cmdline
                                 tail = parts[6] if len(parts) > 6 else ""
-                                role = "qa" if "--role qa" in tail else "coder"
+                                m_role = __import__("re").search(r"--role\s+(\S+)", tail)
+                                role = m_role.group(1) if m_role else "coder"
                                 try:
                                     start_time = datetime.strptime(start_str, "%a %b %d %H:%M:%S %Y")
                                     agents.append((pid, start_time, role))

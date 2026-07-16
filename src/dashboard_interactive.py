@@ -178,116 +178,46 @@ class InteractiveDashboard(BaseDashboard):
             self.console.print("\n\nDashboard stopped", style="yellow")
 
     def handle_start_agent(self):
-        """Start both autonomous agents (coder + QA)"""
-        self.console.print("\n[AGENT] Starting Autonomous Agents (Coder + QA)", style="bold yellow")
-        self.console.print("\nThis will start TWO processes in continuous mode:", style="dim")
-        self.console.print("  • Coder agent — picks up agent-task issues, opens PRs", style="dim")
-        self.console.print("  • QA agent   — verifies open PRs (pytest + qa-review)\n", style="dim")
+        """Start/ensure the three agents via systemd (idempotent, no duplicates)."""
+        self.console.print("\n[AGENT] Autonomous Agents (coder + qa + pr-feedback)", style="bold yellow")
+        self.console.print(
+            "\nDelegates to scripts/ensure-agents.sh: running agents with current\n"
+            "code are LEFT ALONE, outdated/stopped ones are (re)started, stray\n"
+            "non-systemd agent processes are removed. Safe to run anytime.\n",
+            style="dim")
         self.console.print("Confirm? (y/n): ", style="cyan", end="")
 
         confirm = input().strip().lower()
         if confirm == 'y':
-            self.console.print("\n[+] Starting agents...", style="green")
-            self.console.print("TIP: Use [s] Stream Logs to watch progress (coder log).", style="dim")
-            self.console.print("TIP: tail qa-agent.log for QA progress.", style="dim")
-            self.console.print("TIP: Use [k] Kill Agent to stop both.\n", style="dim")
-
-            # Start agent in background (fully detached)
-            # Check if wsl-venv exists (WSL), otherwise use venv (Linux native)
-            if os.path.exists("wsl-venv/bin/python3"):
-                python_cmd = "wsl-venv/bin/python3"
-            elif sys.platform == 'win32':
-                python_cmd = "python"
-            else:
-                python_cmd = "venv/bin/python3"
-
-            # Build the env the spawned agent will inherit. Inject
-            # $HOME/.dotnet (Linux dotnet SDK) and $HOME/.dotnet/tools into
-            # PATH so build_errors.py / smart_test.py and any subprocess
-            # `dotnet ...` call resolves. Subprocesses inherit only the env
-            # we pass, so without this they get the dashboard's PATH (which
-            # has /mnt/c/Program Files/dotnet/ for .exe interop but no
-            # Linux `dotnet`).
-            env = os.environ.copy()
-            home = os.path.expanduser("~")
-            # Prepend toolchains we expect on the worker's PATH:
-            # - $HOME/.dotnet for `dotnet build` / `dotnet test`
-            # - $HOME/.npm-global/bin for `codegraph` (MCP server binary)
-            extra_paths = [
-                os.path.join(home, ".npm-global", "bin"),
-                os.path.join(home, ".dotnet"),
-                os.path.join(home, ".dotnet", "tools"),
-            ]
-            existing = env.get("PATH", "")
-            for p in reversed(extra_paths):
-                if p not in existing.split(os.pathsep):
-                    existing = p + os.pathsep + existing
-            env["PATH"] = existing
-            env.setdefault("DOTNET_ROOT", os.path.join(home, ".dotnet"))
-
-            qa_log_path = self.monitor.working_dir / "qa-agent.log"
-            qa_log = open(qa_log_path, "a")
-
-            if sys.platform == 'win32':
-                # Windows: use CREATE_NEW_PROCESS_GROUP
-                subprocess.Popen(
-                    [python_cmd, "main.py"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    cwd=self.monitor.working_dir,
-                    env=env,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
-                )
-                subprocess.Popen(
-                    [python_cmd, "main.py", "--role", "qa"],
-                    stdout=qa_log,
-                    stderr=qa_log,
-                    cwd=self.monitor.working_dir,
-                    env=env,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
-                )
-            else:
-                # Unix: use start_new_session for full detachment
-                subprocess.Popen(
-                    [python_cmd, "main.py"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL,
-                    cwd=self.monitor.working_dir,
-                    env=env,
-                    start_new_session=True
-                )
-                subprocess.Popen(
-                    [python_cmd, "main.py", "--role", "qa"],
-                    stdout=qa_log,
-                    stderr=qa_log,
-                    stdin=subprocess.DEVNULL,
-                    cwd=self.monitor.working_dir,
-                    env=env,
-                    start_new_session=True
-                )
-
-            time.sleep(2)
-            self.console.print("[OK] Coder + QA agents started in background!", style="green")
+            self.console.print("")
+            result = subprocess.run(
+                ["bash", "scripts/ensure-agents.sh"],
+                cwd=self.monitor.working_dir,
+                capture_output=True, text=True, timeout=60,
+            )
+            for line in (result.stdout + result.stderr).splitlines():
+                self.console.print(f"  {line}", style="green" if "active" in line else "dim")
             self.console.print("\nPress Enter to continue...", style="dim")
             input()
 
 
     def handle_kill_agent(self):
-        """Kill the agent processes (BOTH coder and QA)"""
-        self.console.print("\n[WARNING] Kill Agent Processes?", style="bold yellow")
-        self.console.print("This will stop BOTH the coder agent AND the QA agent.\n", style="dim")
+        """Stop all three agent units (and any stray agent processes)."""
+        self.console.print("\n[WARNING] Stop Agents?", style="bold yellow")
+        self.console.print("Stops coder + qa + pr-feedback (systemd units) and strays.\n", style="dim")
         self.console.print("Confirm (y/n): ", style="yellow", end="")
 
         confirm = input().strip().lower()
         if confirm == 'y':
-            if sys.platform == 'win32':
-                subprocess.run(["taskkill", "/F", "/IM", "python.exe"], stderr=subprocess.DEVNULL)
-            else:
-                # Matches both `python main.py` and `python main.py --role qa`
-                subprocess.run(["pkill", "-f", "python.*main.py"], stderr=subprocess.DEVNULL)
-
-            self.console.print("\n[+] Coder + QA agents killed", style="green")
+            subprocess.run(
+                ["systemctl", "--user", "stop", "aia-coder", "aia-qa", "aia-prfeedback"],
+                stderr=subprocess.DEVNULL)
+            # Strays (old-style spawns): anchored so only real agent
+            # processes match — any python path, main.py as first arg.
+            subprocess.run(
+                ["pkill", "-f", r"^[^ ]*python[0-9.]* main\.py"],
+                stderr=subprocess.DEVNULL)
+            self.console.print("\n[+] Agents gestoppt (Neustart: [g] oder Desktop start-agents.cmd)", style="green")
             time.sleep(2)
 
     def handle_logs(self):
