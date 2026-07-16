@@ -86,6 +86,8 @@ class QAAgent:
         self.git: Optional[GitRepo] = None
         self.current_repo_name: Optional[str] = None
         self._last_repo_index = -1
+        # Repos already swept for stale qa-running labels this process life.
+        self._swept_repos: set = set()
 
     # ------------------------------------------------------------------
     # Setup
@@ -106,6 +108,26 @@ class QAAgent:
         self.git = GitRepo(local_path, remote, self.github.default_branch)
 
         log.info(f"[qa] setup complete for {repo_name} → {local_path}")
+
+    def _sweep_stale_running_labels(self) -> None:
+        """Drop `qa-running` left behind by a killed QA run.
+
+        Only ONE QA worker exists (the claim label exists to make that
+        explicit), so any qa-running found on our first visit to a repo in
+        this process's lifetime is stale — a previous QA was killed
+        mid-verify. Left in place it would block that PR from ever being
+        re-verified (_find_next_pr skips qa-running PRs).
+        """
+        if self.current_repo_name in self._swept_repos:
+            return
+        self._swept_repos.add(self.current_repo_name)
+        try:
+            for pr in self.github.repo.get_pulls(state="open"):
+                if any(l.name.lower() == LABEL_RUNNING for l in pr.labels):
+                    pr.remove_from_labels(LABEL_RUNNING)
+                    log.info(f"[qa] removed stale '{LABEL_RUNNING}' from PR #{pr.number}")
+        except Exception as e:
+            log.warning(f"[qa] stale-label sweep failed for {self.current_repo_name}: {e}")
 
     # ------------------------------------------------------------------
     # PR discovery
@@ -373,6 +395,7 @@ class QAAgent:
 
         log.info(f"[qa] checking repository: {repo_name}")
         self._setup_for_repo(repo_name)
+        self._sweep_stale_running_labels()
 
         pr = self._find_next_pr()
         if not pr:

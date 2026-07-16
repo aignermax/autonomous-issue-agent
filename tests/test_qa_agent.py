@@ -425,3 +425,35 @@ class TestQAAgentClaudeReview:
         assert result.review.verdict == "BLOCKING"
         assert "simulated CLI crash" in result.review.summary
         assert LABEL_FAILED in _labels_added(pr)
+
+
+class TestStaleRunningLabelSweep:
+    def _make_qa(self):
+        from src.agents.qa_agent import QAAgent
+        qa = QAAgent.__new__(QAAgent)
+        qa.current_repo_name = "o/r"
+        qa._swept_repos = set()
+        qa.github = Mock()
+        return qa
+
+    def test_sweep_removes_stale_label_once_per_repo(self):
+        qa = self._make_qa()
+        stale = Mock()
+        stale.number = 7
+        label = Mock(); label.name = "qa-running"
+        stale.labels = [label]
+        clean = Mock(); clean.labels = []
+        qa.github.repo.get_pulls.return_value = [stale, clean]
+
+        qa._sweep_stale_running_labels()
+        stale.remove_from_labels.assert_called_once_with("qa-running")
+        clean.remove_from_labels.assert_not_called()
+
+        # second call for same repo: no further API traffic
+        qa._sweep_stale_running_labels()
+        assert qa.github.repo.get_pulls.call_count == 1
+
+    def test_sweep_survives_api_errors(self):
+        qa = self._make_qa()
+        qa.github.repo.get_pulls.side_effect = RuntimeError("boom")
+        qa._sweep_stale_running_labels()  # must not raise
