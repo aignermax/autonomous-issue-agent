@@ -32,6 +32,26 @@ from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 
+def tail_lines(path, max_lines: int, max_bytes: int = 262144) -> list:
+    """Read at most `max_lines` from the end of `path` WITHOUT loading the
+    whole file. Multi-MB agent logs previously made every dashboard refresh
+    (5s cycle) re-read the full file, freezing the UI."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines(keepends=True)
+        # Drop a likely-partial first line when we started mid-file.
+        if size > max_bytes and lines:
+            lines = lines[1:]
+        return lines[-max_lines:]
+    except OSError:
+        return []
+
+
 @dataclass
 class MCPServerStatus:
     """Status of an MCP server"""
@@ -266,8 +286,7 @@ class DashboardMonitor:
                 # Read a generous tail. Worker phases can emit hundreds of
                 # "Claude Code activity" lines, so a small window drops the
                 # earlier phase markers (Found issue, Reviewer running, ...).
-                with open(self.agent_log, 'r') as f:
-                    lines = f.readlines()[-1000:]
+                lines = tail_lines(self.agent_log, 1000)
 
                 # First pass: collect complexity + branch info from anywhere in
                 # the window (these can come from before the current phase).
@@ -428,8 +447,7 @@ class DashboardMonitor:
             try:
                 import re
                 last_activity = datetime.now() - datetime.fromtimestamp(qa_log.stat().st_mtime)
-                with open(qa_log, 'r') as f:
-                    tail = f.readlines()[-200:]
+                tail = tail_lines(qa_log, 200)
                 # Walk newest → oldest, latch onto the first phase marker.
                 pr_re = re.compile(r"\[qa\] verifying PR #(\d+)|\[qa-review\] running on PR #(\d+)")
                 done_re = re.compile(r"\[qa\] PR #\d+ (PASSED|FAILED)|\[qa\] sleeping")
@@ -461,11 +479,11 @@ class DashboardMonitor:
         """Get recent issue history from agent.log"""
         history = {}  # Use dict to deduplicate by issue number
 
-        # Parse agent.log for issue completions
+        # Parse agent.log for issue completions. Bounded tail — this runs on
+        # every refresh and the log grows unbounded.
         if self.agent_log.exists():
             try:
-                with open(self.agent_log, 'r') as f:
-                    lines = f.readlines()
+                lines = tail_lines(self.agent_log, 5000, max_bytes=524288)
 
                 import re
                 for i, line in enumerate(lines):

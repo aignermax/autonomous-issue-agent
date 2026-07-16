@@ -21,7 +21,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 # Import existing dashboard components
-from dashboard import DashboardMonitor, Dashboard as BaseDashboard
+from dashboard import DashboardMonitor, Dashboard as BaseDashboard, tail_lines
 
 
 class InteractiveDashboard(BaseDashboard):
@@ -297,10 +297,8 @@ class InteractiveDashboard(BaseDashboard):
         self.console.print("=" * 80 + "\n", style="dim")
 
         if self.monitor.agent_log.exists():
-            with open(self.monitor.agent_log, 'r') as f:
-                lines = f.readlines()[-30:]
-                for line in lines:
-                    print(line.rstrip())
+            for line in tail_lines(self.monitor.agent_log, 30):
+                print(line.rstrip())
         else:
             self.console.print("No log file found", style="red")
 
