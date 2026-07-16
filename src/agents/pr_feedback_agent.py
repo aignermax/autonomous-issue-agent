@@ -1,11 +1,11 @@
 """
 PR-feedback agent: turns human PR comments into fixes + fresh screenshots.
 
-Polls open coder PRs (title prefix `Agent:`) for comments containing a
-trigger marker (default `@agent`). For each trigger it checks out the PR
-branch, runs a Claude Code worker with the feedback, pushes the result,
-re-publishes the visual walkthrough and replies to the comment with a mini
-report + updated screenshots.
+Polls ALL open PRs for comments containing a trigger marker (default
+`@agent`) — the marker is the opt-in, so human-authored PRs work too. For
+each trigger it checks out the PR branch, runs a Claude Code worker with
+the feedback, pushes the result, re-publishes the visual walkthrough and
+replies to the comment with a mini report + updated screenshots.
 
 Guardrails — all marker-based, because agent comments are posted with the
 same GitHub token as the human's (author filtering can't tell them apart):
@@ -38,7 +38,6 @@ from .agent_config import load_project_config
 
 log = logging.getLogger("agent")
 
-PR_TITLE_PREFIX = "Agent:"
 REPLY_MARKER = "<!-- pr-feedback-agent -->"
 STATE_FILENAME = "pr-feedback-state.json"
 MAX_ATTEMPTS_PER_COMMENT = 2
@@ -112,6 +111,13 @@ class FeedbackState:
     def _entry(self, key: str) -> dict:
         return self._data.setdefault(
             key, {"processed": [], "attempts": {}, "cap_notified": False})
+
+    def last_seen_update(self, key: str) -> str:
+        return str(self._entry(key).get("last_update", ""))
+
+    def set_last_seen_update(self, key: str, updated_at: str) -> None:
+        self._entry(key)["last_update"] = updated_at
+        self._save()
 
     def processed_ids(self, key: str) -> List[int]:
         return list(self._entry(key)["processed"])
@@ -198,9 +204,21 @@ class PRFeedbackAgent:
         marker = self.config.pr_feedback_marker
         for pr in self.github.repo.get_pulls(
                 state="open", sort="created", direction="asc"):
-            if not pr.title.startswith(PR_TITLE_PREFIX):
-                continue
+            # Any open PR is eligible — the marker itself is the opt-in
+            # (comments post under the human's token, so a marker comment is
+            # always an explicit human request, agent replies carry
+            # REPLY_MARKER and are filtered). No Agent:-title requirement.
             key = f"{repo_name}#{pr.number}"
+
+            # API budget: only list comments when the PR changed since our
+            # last look. A new comment bumps updated_at, so nothing is missed;
+            # with dozens of open PRs per repo this collapses steady-state
+            # polling from N comment-listings per cycle to ~zero.
+            updated_at = (pr.updated_at.isoformat()
+                          if getattr(pr, "updated_at", None) else "")
+            if updated_at and updated_at == self.state.last_seen_update(key):
+                continue
+
             try:
                 comments = list(pr.get_issue_comments())
             except Exception as e:
@@ -209,6 +227,7 @@ class PRFeedbackAgent:
             triggers = find_trigger_comments(
                 comments, marker, self.state.processed_ids(key))
             if not triggers:
+                self.state.set_last_seen_update(key, updated_at)
                 continue
 
             if self.state.rounds(key) >= self.config.pr_feedback_max_rounds:
