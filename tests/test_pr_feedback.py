@@ -155,3 +155,55 @@ def test_build_pr_feedback_prompt_contents():
     assert "@agent make the button blue" in p
     assert "artifacts/ui-screenshots/issue-5/" in p
     assert "FEEDBACK REPORT" in p
+
+
+# --- repo policy + fork handling ------------------------------------------
+
+def test_load_project_config_from_text():
+    from src.agents.agent_config import load_project_config_from_text
+    cfg = load_project_config_from_text(
+        "build_cmd = \"dotnet build\"\nagents_enabled = [\"coder\", \"pr-feedback\"]\n")
+    assert cfg.is_agent_enabled("pr-feedback")
+    assert not load_project_config_from_text("").is_agent_enabled("pr-feedback")
+    # broken TOML falls back to defaults instead of raising
+    assert not load_project_config_from_text("{nonsense").is_agent_enabled("pr-feedback")
+
+
+def _fb_agent_for_handling(tmp_path):
+    from unittest.mock import MagicMock
+    a = PRFeedbackAgent.__new__(PRFeedbackAgent)
+    a.config = SimpleNamespace(pr_feedback_max_rounds=3, pr_feedback_max_turns=10,
+                               pr_feedback_marker="@agent", tools_dir=None,
+                               tools_python=None, coder_model=None)
+    a.current_repo_name = "o/r"
+    a.state = FeedbackState(tmp_path / "s.json")
+    a.git = MagicMock()
+    a.github = MagicMock()
+    a.claude_factory = MagicMock()
+    return a
+
+
+def test_fork_pr_is_declined_with_reply(tmp_path):
+    a = _fb_agent_for_handling(tmp_path)
+    pr = _StubPR()
+    pr.head = SimpleNamespace(ref="feat-x", repo=SimpleNamespace(full_name="someone/fork"))
+    pr.body = ""
+    comment = SimpleNamespace(id=5, body="@agent do it")
+    a._handle_feedback(pr, "o/r#42", comment)
+    assert any("fork" in c for c in pr.comments)
+    assert a.state.processed_ids("o/r#42") == [5]
+    a.claude_factory.assert_not_called()
+
+
+def test_disabled_policy_replies_instead_of_silent_swallow(tmp_path):
+    a = _fb_agent_for_handling(tmp_path)
+    pr = _StubPR()
+    pr.head = SimpleNamespace(ref="feat-x", repo=SimpleNamespace(full_name="o/r"))
+    pr.body = ""
+    # policy read yields config without pr-feedback
+    a._load_repo_policy = lambda: __import__("src.agents.agent_config", fromlist=["ProjectConfig"]).ProjectConfig()
+    comment = SimpleNamespace(id=6, body="@agent do it")
+    a._handle_feedback(pr, "o/r#43", comment)
+    assert any("not" in c and "enabled" in c for c in pr.comments)
+    assert a.state.processed_ids("o/r#43") == [6]
+    a.claude_factory.assert_not_called()

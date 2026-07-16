@@ -63,6 +63,19 @@ class ProjectConfig:
         return role in self.agents_enabled
 
 
+def _config_from_raw(raw: dict) -> ProjectConfig:
+    """Build a ProjectConfig from a parsed TOML dict."""
+    return ProjectConfig(
+        build_cmd=str(raw.get("build_cmd", "")).strip(),
+        test_cmd=str(raw.get("test_cmd", "")).strip(),
+        ui_test_cmd=str(raw.get("ui_test_cmd", "")).strip(),
+        tech_stack=_as_str_list(raw.get("tech_stack", [])),
+        agents_enabled=_as_str_list(raw.get("agents_enabled", ["coder"])) or ["coder"],
+        command_timeout_sec=int(raw.get("command_timeout_sec", 1800)),
+        qa_review_enabled=bool(raw.get("qa_review_enabled", False)),
+    )
+
+
 def load_project_config(repo_root: Path) -> ProjectConfig:
     """Load `.agent.toml` from a repository root, returning defaults if absent."""
     config_path = repo_root / CONFIG_FILENAME
@@ -84,15 +97,24 @@ def load_project_config(repo_root: Path) -> ProjectConfig:
         log.error(f"Failed to parse {config_path}: {e}. Using defaults.")
         return ProjectConfig()
 
-    return ProjectConfig(
-        build_cmd=str(raw.get("build_cmd", "")).strip(),
-        test_cmd=str(raw.get("test_cmd", "")).strip(),
-        ui_test_cmd=str(raw.get("ui_test_cmd", "")).strip(),
-        tech_stack=_as_str_list(raw.get("tech_stack", [])),
-        agents_enabled=_as_str_list(raw.get("agents_enabled", ["coder"])) or ["coder"],
-        command_timeout_sec=int(raw.get("command_timeout_sec", 1800)),
-        qa_review_enabled=bool(raw.get("qa_review_enabled", False)),
-    )
+    return _config_from_raw(raw)
+
+
+def load_project_config_from_text(text: str) -> ProjectConfig:
+    """Parse `.agent.toml` CONTENT (e.g. from `git show origin/main:.agent.toml`).
+
+    Role opt-ins are repo POLICY and must reflect the current default
+    branch — reading the file from an old PR branch silently disables
+    roles that were enabled after the branch was cut.
+    """
+    if _toml is None or not text.strip():
+        return ProjectConfig()
+    try:
+        raw = _toml.loads(text)
+    except Exception as e:
+        log.error(f"Failed to parse {CONFIG_FILENAME} content: {e}. Using defaults.")
+        return ProjectConfig()
+    return _config_from_raw(raw)
 
 
 def _as_str_list(value: object) -> list[str]:

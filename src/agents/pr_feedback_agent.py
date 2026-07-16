@@ -34,7 +34,7 @@ from ..config import Config
 from ..git_repo import GitRepo
 from ..github_client import GitHubClient
 from ..pr_media import publish_walkthrough
-from .agent_config import load_project_config
+from .agent_config import ProjectConfig, load_project_config_from_text
 
 log = logging.getLogger("agent")
 
@@ -263,15 +263,41 @@ class PRFeedbackAgent:
             f"(round {self.state.rounds(key) + 1}/{self.config.pr_feedback_max_rounds})"
         )
         try:
-            self._checkout_pr_branch(branch)
+            # Fork PRs: the head branch lives in another repo — we can neither
+            # fetch it from origin nor push back. Decline explicitly instead
+            # of failing twice with a cryptic fetch error.
+            head_repo = getattr(getattr(pr, "head", None), "repo", None)
+            head_full_name = getattr(head_repo, "full_name", None)
+            if head_full_name and head_full_name != self.current_repo_name:
+                log.info(f"[pr-feedback] PR #{pr.number} is from fork {head_full_name} — declining")
+                self._safe_comment(
+                    pr,
+                    f"{REPLY_MARKER}\n[pr-feedback] This PR's branch lives in a "
+                    f"fork (`{head_full_name}`), which I can't push to — please "
+                    "apply the request manually or move the branch into this repo.",
+                )
+                self.state.mark_processed(key, comment.id)
+                return
 
-            project_cfg = load_project_config(self.git.path)
+            # Role opt-in is repo POLICY: read .agent.toml from the DEFAULT
+            # branch, never from the PR branch — old branches predate the
+            # opt-in and would silently disable the role (this once swallowed
+            # 19 walkthrough requests without any reply).
+            project_cfg = self._load_repo_policy()
             if not project_cfg.is_agent_enabled("pr-feedback"):
                 log.info(
                     f"[pr-feedback] disabled for {self.current_repo_name} via "
-                    ".agent.toml — marking comment handled")
+                    ".agent.toml — declining with reply")
+                self._safe_comment(
+                    pr,
+                    f"{REPLY_MARKER}\n[pr-feedback] The pr-feedback role is not "
+                    "enabled for this repository (`agents_enabled` in "
+                    "`.agent.toml` on the default branch).",
+                )
                 self.state.mark_processed(key, comment.id)
                 return
+
+            self._checkout_pr_branch(branch)
 
             issue_number = extract_issue_number(pr.body or "", pr.number)
             prompt = self._build_prompt(pr, branch, comment, issue_number)
@@ -328,6 +354,18 @@ class PRFeedbackAgent:
             issue_number=issue_number,
             tools_dir=tools_dir, tools_python=tools_python,
         )
+
+    def _load_repo_policy(self) -> ProjectConfig:
+        """Read .agent.toml from origin's DEFAULT branch (current repo policy)."""
+        assert self.git is not None and self.github is not None
+        self.git.ensure_cloned()
+        default = self.github.default_branch
+        self.git.run("fetch", "origin", f"+{default}:refs/remotes/origin/{default}")
+        show = self.git.run("show", f"origin/{default}:.agent.toml")
+        if show.returncode != 0:
+            # No .agent.toml on the default branch → defaults (role disabled).
+            return ProjectConfig()
+        return load_project_config_from_text(show.stdout)
 
     def _checkout_pr_branch(self, branch: str) -> None:
         """Same discipline as the QA agent: explicit refspec, hard reset, clean."""
