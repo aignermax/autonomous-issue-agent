@@ -150,8 +150,14 @@ class DashboardMonitor:
 
         return servers
 
-    def get_all_agent_processes(self) -> List[Tuple[int, datetime]]:
-        """Get all running agent processes (detects duplicates) - cross-platform using psutil"""
+    def get_all_agent_processes(self) -> List[Tuple[int, datetime, str]]:
+        """Get all running agent processes — tagged by role.
+
+        Returns a list of (pid, start_time, role) where role is "coder" for
+        the default `python main.py` invocation and "qa" when `--role qa`
+        appears in the cmdline. Coder + QA run side-by-side and must not be
+        treated as duplicates of each other.
+        """
         agents = []
         try:
             import psutil
@@ -166,7 +172,12 @@ class DashboardMonitor:
                             pid = proc_info['pid']
                             # Convert create_time (timestamp) to datetime
                             start_time = datetime.fromtimestamp(proc_info['create_time'])
-                            agents.append((pid, start_time))
+                            role = "coder"
+                            for i, a in enumerate(cmdline):
+                                if a == "--role" and i + 1 < len(cmdline) and cmdline[i + 1] == "qa":
+                                    role = "qa"
+                                    break
+                            agents.append((pid, start_time, role))
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass
         except ImportError:
@@ -182,7 +193,7 @@ class DashboardMonitor:
                     )
                     # This is less reliable, just mark as running if found
                     if 'python.exe' in result.stdout:
-                        agents.append((0, datetime.now()))  # Dummy entry
+                        agents.append((0, datetime.now(), "coder"))  # Dummy entry
                 else:
                     # Unix/Linux fallback
                     result = subprocess.run(
@@ -198,30 +209,38 @@ class DashboardMonitor:
                             if len(parts) >= 6:
                                 pid = int(parts[0])
                                 start_str = ' '.join(parts[1:6])
+                                # Detect role from the rest of the cmdline
+                                tail = parts[6] if len(parts) > 6 else ""
+                                role = "qa" if "--role qa" in tail else "coder"
                                 try:
                                     start_time = datetime.strptime(start_str, "%a %b %d %H:%M:%S %Y")
-                                    agents.append((pid, start_time))
+                                    agents.append((pid, start_time, role))
                                 except:
-                                    agents.append((pid, datetime.now()))
+                                    agents.append((pid, datetime.now(), role))
             except:
                 pass
 
         return agents
 
     def get_agent_status(self) -> AgentStatus:
-        """Get current agent status from logs and process"""
-        # Check if agent is running and detect duplicates
-        all_agents = self.get_all_agent_processes()
+        """Get current coder-agent status from logs and process.
 
-        if not all_agents:
+        Only the "coder" role is considered here — the QA agent has its own
+        status accessor (see get_qa_status) and shares neither process tree
+        nor log file with the coder.
+        """
+        # Check if agent is running and detect duplicates within the coder role
+        coder_agents = [a for a in self.get_all_agent_processes() if a[2] == "coder"]
+
+        if not coder_agents:
             return AgentStatus(False, None, None, None, None, "stopped", None, None, None, None, 0, None, None, None)
 
-        # Use the most recently started agent
-        all_agents.sort(key=lambda x: x[1], reverse=True)
-        pid, start_time = all_agents[0]
+        # Use the most recently started coder
+        coder_agents.sort(key=lambda x: x[1], reverse=True)
+        pid, start_time, _role = coder_agents[0]
 
-        # Store duplicate count for later warning
-        duplicate_count = len(all_agents) - 1
+        # Duplicate count: extra coders beyond the canonical one
+        duplicate_count = len(coder_agents) - 1
 
         # Parse last lines of agent.log to determine state
         state = "polling"
@@ -381,6 +400,55 @@ class DashboardMonitor:
             duplicate_count, issue_complexity, current_branch, current_pr
         )
 
+    def get_qa_status(self) -> dict:
+        """Lightweight QA-agent status (process + heartbeat from qa-agent.log).
+
+        Returned dict keys:
+            is_running: bool
+            pid: Optional[int]
+            duplicates: int           — extra QA processes beyond the canonical one
+            state: str                — "verifying" | "polling" | "stopped"
+            current_pr: Optional[int] — PR being verified, when state=="verifying"
+            last_activity: Optional[timedelta]
+        """
+        qa_agents = [a for a in self.get_all_agent_processes() if a[2] == "qa"]
+        if not qa_agents:
+            return {"is_running": False, "pid": None, "duplicates": 0,
+                    "state": "stopped", "current_pr": None, "last_activity": None}
+
+        qa_agents.sort(key=lambda x: x[1], reverse=True)
+        pid, _start, _role = qa_agents[0]
+        duplicates = len(qa_agents) - 1
+
+        qa_log = self.working_dir / "qa-agent.log"
+        state = "polling"
+        current_pr = None
+        last_activity = None
+        if qa_log.exists():
+            try:
+                import re
+                last_activity = datetime.now() - datetime.fromtimestamp(qa_log.stat().st_mtime)
+                with open(qa_log, 'r') as f:
+                    tail = f.readlines()[-200:]
+                # Walk newest → oldest, latch onto the first phase marker.
+                pr_re = re.compile(r"\[qa\] verifying PR #(\d+)|\[qa-review\] running on PR #(\d+)")
+                done_re = re.compile(r"\[qa\] PR #\d+ (PASSED|FAILED)|\[qa\] sleeping")
+                for line in reversed(tail):
+                    m = pr_re.search(line)
+                    if m:
+                        state = "verifying"
+                        current_pr = int(m.group(1) or m.group(2))
+                        break
+                    if done_re.search(line):
+                        state = "polling"
+                        break
+            except Exception:
+                pass
+
+        return {"is_running": True, "pid": pid, "duplicates": duplicates,
+                "state": state, "current_pr": current_pr,
+                "last_activity": last_activity}
+
     def _format_repo_name(self, repo_name: str) -> str:
         """Format repository name to first 4 chars + '-' + last 4 chars."""
         if not repo_name:
@@ -509,60 +577,64 @@ class Dashboard:
         return Panel(text, border_style="cyan")
 
     def create_agent_panel(self, status: AgentStatus) -> Panel:
-        """Create agent status panel"""
-        if not status.is_running:
-            content = Text("[X] Agent Not Running", style="bold red")
-            return Panel(content, title="Agent Status", border_style="red")
+        """Create agent status panel (coder + QA roles)."""
+        qa = self.monitor.get_qa_status()
+
+        if not status.is_running and not qa["is_running"]:
+            content = Text("[X] No agents running", style="bold red")
+            return Panel(content, title="Agents Status", border_style="red")
 
         table = Table(show_header=False, box=None, padding=(0, 2))
         table.add_column("Key", style="cyan")
         table.add_column("Value")
 
-        # Status indicator
-        if status.state == "working":
-            status_text = Text("[>] Worker", style="bold yellow")
-        elif status.state == "reviewing":
-            status_text = Text("[R] Reviewer", style="bold magenta")
-        elif status.state == "qa":
-            status_text = Text("[Q] QA", style="bold blue")
-        elif status.state == "polling":
-            status_text = Text("[+] Polling", style="bold green")
-        elif status.state == "error":
-            status_text = Text("[X] Error", style="bold red")
+        if not status.is_running:
+            table.add_row("Coder", Text("[X] not running", style="red"))
         else:
-            status_text = Text("[ ] Idle", style="dim")
-
-        table.add_row("Status", status_text)
-        table.add_row("PID", str(status.pid))
-
-        # Warning for duplicate agents
-        if status.duplicate_agents > 0:
-            warning_text = Text(f"WARNING: {status.duplicate_agents + 1} agents running!", style="bold red")
-            table.add_row("WARNING", warning_text)
-
-        if status.current_issue:
-            if status.issue_complexity:
-                complexity_style = "bold yellow" if status.issue_complexity == "COMPLEX" else "cyan"
-                # Create composite Text object properly
-                issue_display = Text(f"#{status.current_issue} (")
-                issue_display.append(status.issue_complexity, style=complexity_style)
-                issue_display.append(")")
+            # Status indicator
+            if status.state == "working":
+                status_text = Text("[>] Worker", style="bold yellow")
+            elif status.state == "reviewing":
+                status_text = Text("[R] Reviewer", style="bold magenta")
+            elif status.state == "qa":
+                status_text = Text("[Q] QA-fix", style="bold blue")
+            elif status.state == "polling":
+                status_text = Text("[+] Polling", style="bold green")
+            elif status.state == "error":
+                status_text = Text("[X] Error", style="bold red")
             else:
-                issue_display = f"#{status.current_issue}"
-            table.add_row("Current Issue", issue_display)
-            if status.current_pr:
-                table.add_row("Current PR", Text(f"#{status.current_pr}", style="magenta"))
-            if status.current_branch:
-                table.add_row("Working Branch", Text(status.current_branch, style="green"))
-            if status.current_turn and status.max_turns:
-                table.add_row("Progress", f"Turn {status.current_turn}/{status.max_turns}")
-        else:
-            table.add_row("Current Issue", Text("None", style="dim"))
-            if status.current_pr:
-                table.add_row("Current PR", Text(f"#{status.current_pr}", style="magenta"))
+                status_text = Text("[ ] Idle", style="dim")
+
+            table.add_row("Coder", status_text)
+            table.add_row("  PID", str(status.pid))
+
+            # Warning for duplicate coders
+            if status.duplicate_agents > 0:
+                warning_text = Text(f"WARNING: {status.duplicate_agents + 1} coder agents running!", style="bold red")
+                table.add_row("  WARNING", warning_text)
+
+            if status.current_issue:
+                if status.issue_complexity:
+                    complexity_style = "bold yellow" if status.issue_complexity == "COMPLEX" else "cyan"
+                    issue_display = Text(f"#{status.current_issue} (")
+                    issue_display.append(status.issue_complexity, style=complexity_style)
+                    issue_display.append(")")
+                else:
+                    issue_display = f"#{status.current_issue}"
+                table.add_row("  Current Issue", issue_display)
+                if status.current_pr:
+                    table.add_row("  Current PR", Text(f"#{status.current_pr}", style="magenta"))
+                if status.current_branch:
+                    table.add_row("  Working Branch", Text(status.current_branch, style="green"))
+                if status.current_turn and status.max_turns:
+                    table.add_row("  Progress", f"Turn {status.current_turn}/{status.max_turns}")
+            else:
+                table.add_row("  Current Issue", Text("None", style="dim"))
+                if status.current_pr:
+                    table.add_row("  Current PR", Text(f"#{status.current_pr}", style="magenta"))
 
         # Last Activity (Heartbeat!)
-        if status.last_activity:
+        if status.is_running and status.last_activity:
             seconds = int(status.last_activity.total_seconds())
             if seconds < 60:
                 activity_str = f"{seconds}s ago"
@@ -585,10 +657,10 @@ class Dashboard:
                 activity_str = f"{hours}h {mins}m ago [X]"
                 activity_color = "red"
 
-            table.add_row("Last Log Entry", Text(activity_str, style=activity_color))
+            table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
 
         # CPU Usage
-        if status.cpu_percent is not None:
+        if status.is_running and status.cpu_percent is not None:
             if status.cpu_percent > 10:
                 cpu_str = f"{status.cpu_percent:.1f}% (active)"
                 cpu_color = "green"
@@ -604,10 +676,10 @@ class Dashboard:
                     cpu_str = f"{status.cpu_percent:.1f}%"
                     cpu_color = "dim"
 
-            table.add_row("CPU Usage", Text(cpu_str, style=cpu_color))
+            table.add_row("  CPU Usage", Text(cpu_str, style=cpu_color))
 
         # Session Duration (for any active Claude subprocess phase)
-        if status.session_duration and status.state in ("working", "reviewing", "qa"):
+        if status.is_running and status.session_duration and status.state in ("working", "reviewing", "qa"):
             mins = int(status.session_duration.total_seconds() // 60)
             secs = int(status.session_duration.total_seconds() % 60)
             if mins < 60:
@@ -617,15 +689,49 @@ class Dashboard:
                 mins = mins % 60
                 duration_str = f"{hours}h {mins}m"
 
-            table.add_row("Session Time", duration_str)
+            table.add_row("  Session Time", duration_str)
 
         # Next Poll (for polling state)
-        if status.next_poll_in:
+        if status.is_running and status.next_poll_in:
             mins = int(status.next_poll_in.total_seconds() // 60)
             secs = int(status.next_poll_in.total_seconds() % 60)
-            table.add_row("Next Poll", f"{mins}m {secs}s")
+            table.add_row("  Next Poll", f"{mins}m {secs}s")
 
-        return Panel(table, title="Agent Status", border_style="green" if status.is_running else "red")
+        # ── QA Agent (separate process, separate log) ─────────────────
+        if not qa["is_running"]:
+            table.add_row("QA", Text("[X] not running", style="red"))
+        else:
+            if qa["state"] == "verifying":
+                qa_state_text = Text("[V] Verifying", style="bold blue")
+            elif qa["state"] == "polling":
+                qa_state_text = Text("[+] Polling", style="bold green")
+            else:
+                qa_state_text = Text(qa["state"], style="dim")
+            table.add_row("QA", qa_state_text)
+            table.add_row("  PID", str(qa["pid"]))
+            if qa["duplicates"] > 0:
+                table.add_row("  WARNING",
+                              Text(f"{qa['duplicates'] + 1} QA agents running!", style="bold red"))
+            if qa["current_pr"]:
+                table.add_row("  Current PR", Text(f"#{qa['current_pr']}", style="magenta"))
+            if qa["last_activity"]:
+                s = int(qa["last_activity"].total_seconds())
+                if s < 60:
+                    activity_str, activity_color = f"{s}s ago", "green"
+                elif s < 1800:
+                    activity_str, activity_color = f"{s // 60}m ago", "green" if s < 300 else "yellow"
+                else:
+                    activity_str, activity_color = f"{s // 60}m ago [!]", "red"
+                table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
+
+        # Border green only if both are healthy; red if both stopped; yellow otherwise
+        if status.is_running and qa["is_running"]:
+            border = "green"
+        elif not status.is_running and not qa["is_running"]:
+            border = "red"
+        else:
+            border = "yellow"
+        return Panel(table, title="Agents Status (Coder + QA)", border_style=border)
 
     def create_config_panel(self) -> Panel:
         """Create configuration panel showing monitored repositories with branch info"""

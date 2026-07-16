@@ -216,7 +216,14 @@ class QAAgent:
         self.git.ensure_cloned()
 
         # Always fetch the latest state of the PR branch from origin.
-        fetch = self.git.run("fetch", "origin", branch)
+        # Pass an explicit refspec so refs/remotes/origin/<branch> is updated
+        # in addition to FETCH_HEAD — without it, `git fetch origin BRANCH`
+        # only writes FETCH_HEAD, and the subsequent `reset --hard
+        # origin/BRANCH` would silently use the stale remote-tracking ref
+        # (we saw this swallow a freshly-pushed commit during khepri E2E).
+        fetch = self.git.run(
+            "fetch", "origin", f"+{branch}:refs/remotes/origin/{branch}"
+        )
         if fetch.returncode != 0:
             raise RuntimeError(f"fetch failed: {fetch.stderr.strip()}")
 

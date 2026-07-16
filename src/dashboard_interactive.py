@@ -178,17 +178,19 @@ class InteractiveDashboard(BaseDashboard):
             self.console.print("\n\nDashboard stopped", style="yellow")
 
     def handle_start_agent(self):
-        """Start the autonomous agent"""
-        self.console.print("\n[AGENT] Starting Autonomous Agent", style="bold yellow")
-        self.console.print("\nThis will start the agent in continuous mode,", style="dim")
-        self.console.print("automatically working on open issues.\n", style="dim")
+        """Start both autonomous agents (coder + QA)"""
+        self.console.print("\n[AGENT] Starting Autonomous Agents (Coder + QA)", style="bold yellow")
+        self.console.print("\nThis will start TWO processes in continuous mode:", style="dim")
+        self.console.print("  • Coder agent — picks up agent-task issues, opens PRs", style="dim")
+        self.console.print("  • QA agent   — verifies open PRs (pytest + qa-review)\n", style="dim")
         self.console.print("Confirm? (y/n): ", style="cyan", end="")
 
         confirm = input().strip().lower()
         if confirm == 'y':
-            self.console.print("\n[+] Starting agent...", style="green")
-            self.console.print("TIP: Use [s] Stream Logs to watch progress!", style="dim")
-            self.console.print("TIP: Use [k] Kill Agent to stop it.\n", style="dim")
+            self.console.print("\n[+] Starting agents...", style="green")
+            self.console.print("TIP: Use [s] Stream Logs to watch progress (coder log).", style="dim")
+            self.console.print("TIP: tail qa-agent.log for QA progress.", style="dim")
+            self.console.print("TIP: Use [k] Kill Agent to stop both.\n", style="dim")
 
             # Start agent in background (fully detached)
             # Check if wsl-venv exists (WSL), otherwise use venv (Linux native)
@@ -223,12 +225,23 @@ class InteractiveDashboard(BaseDashboard):
             env["PATH"] = existing
             env.setdefault("DOTNET_ROOT", os.path.join(home, ".dotnet"))
 
+            qa_log_path = self.monitor.working_dir / "qa-agent.log"
+            qa_log = open(qa_log_path, "a")
+
             if sys.platform == 'win32':
                 # Windows: use CREATE_NEW_PROCESS_GROUP
                 subprocess.Popen(
                     [python_cmd, "main.py"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    cwd=self.monitor.working_dir,
+                    env=env,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+                subprocess.Popen(
+                    [python_cmd, "main.py", "--role", "qa"],
+                    stdout=qa_log,
+                    stderr=qa_log,
                     cwd=self.monitor.working_dir,
                     env=env,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
@@ -244,17 +257,26 @@ class InteractiveDashboard(BaseDashboard):
                     env=env,
                     start_new_session=True
                 )
+                subprocess.Popen(
+                    [python_cmd, "main.py", "--role", "qa"],
+                    stdout=qa_log,
+                    stderr=qa_log,
+                    stdin=subprocess.DEVNULL,
+                    cwd=self.monitor.working_dir,
+                    env=env,
+                    start_new_session=True
+                )
 
             time.sleep(2)
-            self.console.print("[OK] Agent started in background!", style="green")
+            self.console.print("[OK] Coder + QA agents started in background!", style="green")
             self.console.print("\nPress Enter to continue...", style="dim")
             input()
 
 
     def handle_kill_agent(self):
-        """Kill the agent"""
-        self.console.print("\n[WARNING] Kill Agent Process?", style="bold yellow")
-        self.console.print("This will stop the currently running agent.\n", style="dim")
+        """Kill the agent processes (BOTH coder and QA)"""
+        self.console.print("\n[WARNING] Kill Agent Processes?", style="bold yellow")
+        self.console.print("This will stop BOTH the coder agent AND the QA agent.\n", style="dim")
         self.console.print("Confirm (y/n): ", style="yellow", end="")
 
         confirm = input().strip().lower()
@@ -262,9 +284,10 @@ class InteractiveDashboard(BaseDashboard):
             if sys.platform == 'win32':
                 subprocess.run(["taskkill", "/F", "/IM", "python.exe"], stderr=subprocess.DEVNULL)
             else:
+                # Matches both `python main.py` and `python main.py --role qa`
                 subprocess.run(["pkill", "-f", "python.*main.py"], stderr=subprocess.DEVNULL)
 
-            self.console.print("\n[+] Agent killed", style="green")
+            self.console.print("\n[+] Coder + QA agents killed", style="green")
             time.sleep(2)
 
     def handle_logs(self):

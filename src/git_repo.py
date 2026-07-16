@@ -219,8 +219,12 @@ class GitRepo:
                 if "rejected" in push_result.stderr and "fetch first" in push_result.stderr:
                     log.warning(f"Push rejected - remote branch has diverged")
 
-                    # Fetch latest remote state
-                    self.run("fetch", "origin", branch, timeout=CLONE_GIT_TIMEOUT_SEC)
+                    # Fetch latest remote state. Refspec is required so the
+                    # remote-tracking ref refs/remotes/origin/<branch> is
+                    # actually updated — otherwise the divergence rev-list
+                    # below would compare against a stale ref and conclude
+                    # we are up to date when we are not.
+                    self.run("fetch", "origin", f"+{branch}:refs/remotes/origin/{branch}", timeout=CLONE_GIT_TIMEOUT_SEC)
 
                     # Check if we have diverging commits
                     behind_result = self.run("rev-list", "--count", f"{branch}..origin/{branch}")
