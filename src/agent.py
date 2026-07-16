@@ -15,8 +15,9 @@ from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
 from .github_client import GitHubClient
-from .reviewer import Reviewer
+from .reviewer import Reviewer, ReviewResult
 from .session_state import SessionManager, SessionState
+from .test_gate import TestGate
 from .tools_bootstrap import ensure_tools_installed
 from .worktree import WorktreeManager
 
@@ -817,13 +818,18 @@ class Agent:
     def _run_review_loop(self, issue, pr, branch: str, worktree_path: Path) -> bool:
         """Iterate Worker → Reviewer up to max_review_rounds; tag if exhausted.
 
+        Each round runs the deterministic test gate first. If tests are red, the
+        LLM reviewer is skipped for that round and the failure is sent straight
+        to the worker.
+
         Returns:
-            True if escalated to human (issue should NOT be closed).
-            False if reviewer approved or loop exited cleanly (issue may be closed).
+            True if escalated to a human (issue should NOT be closed).
+            False if all checks passed and the issue may be closed.
         """
         from .prompt_template import build_retry_prompt
 
         reviewer = Reviewer(self.config, self.github, claude_factory=ClaudeCode)
+        gate = TestGate(self.config)
         base_branch = self.git.default_branch
 
         _, _, complexity = self._detect_issue_complexity(issue)
@@ -837,34 +843,51 @@ class Agent:
             f"for PR #{pr.number}"
         )
 
+        blocking = None
         for round_num in range(1, max_rounds + 1):
             log.info(
                 f"Review round {round_num}/{max_rounds} for PR #{pr.number}"
             )
-            result = reviewer.review(
-                issue=issue, pr=pr, branch=branch,
-                base_branch=base_branch, worktree_path=worktree_path,
-            )
-            if not result.has_blocking:
-                log.info(f"Reviewer verdict OK on round {round_num} — done")
-                return False
+
+            gate_result = gate.run(worktree_path)
+            if gate_result is not None and gate_result.has_blocking:
+                log.warning(f"Test gate BLOCKING on round {round_num}")
+                blocking = gate_result
+                # On the final round _flag_for_human posts the escalation comment,
+                # so skip the (redundant) gate comment there.
+                if round_num < max_rounds:
+                    self._post_gate_comment(pr, gate_result)
+            else:
+                # Reached when the gate is skipped (None) OR passed (OK) — both
+                # intentionally proceed to the LLM reviewer.
+                result = reviewer.review(
+                    issue=issue, pr=pr, branch=branch,
+                    base_branch=base_branch, worktree_path=worktree_path,
+                )
+                if not result.has_blocking:
+                    log.info(f"Reviewer verdict OK on round {round_num} — done")
+                    return False
+                blocking = result
 
             if round_num == max_rounds:
                 log.warning(
                     f"Max review rounds reached ({max_rounds}); "
                     f"flagging PR #{pr.number}"
                 )
-                self._flag_for_human(issue, pr, result, max_rounds)
+                if blocking is None:
+                    log.error("Reached max rounds with no blocking result captured (bug); escalating anyway.")
+                    blocking = ReviewResult(verdict="BLOCKING", summary="No blocking result captured.")
+                self._flag_for_human(issue, pr, blocking, max_rounds)
                 return True
 
-            # Retry: rerun worker with reviewer findings in prompt
+            # Retry: rerun worker with blocking findings in prompt
             tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
             tools_python = (
                 str(self.config.tools_python)
                 if self.config.tools_python else "python3"
             )
             retry_prompt = build_retry_prompt(
-                issue=issue, branch=branch, review=result,
+                issue=issue, branch=branch, review=blocking,
                 tools_dir=tools_dir, tools_python=tools_python,
             )
             max_turns, _, _ = self._detect_issue_complexity(issue)
@@ -894,6 +917,18 @@ class Agent:
 
         return False  # unreachable, but keeps type stable
 
+    def _post_gate_comment(self, pr, result) -> None:
+        """Post a short comment on the PR explaining a test-gate block."""
+        try:
+            pr.create_issue_comment(
+                f"## Automated Test Gate — **BLOCKING**\n\n{result.summary}"
+            )
+        except Exception as e:
+            log.error(
+                f"Could not post test-gate comment on PR #{pr.number}: {e}. "
+                f"Gate result still sent to worker, but the PR has no visible record of this block."
+            )
+
     def _flag_for_human(self, issue, pr, result, max_rounds: int) -> None:
         """Add `needs-human` label and post escalation comment."""
         try:
@@ -903,7 +938,8 @@ class Agent:
         try:
             pr.create_issue_comment(
                 f"Reached max review rounds ({max_rounds}) "
-                f"with BLOCKING findings remaining. Last summary: {result.summary}"
+                f"with an unresolved BLOCKING result (test gate or reviewer). "
+                f"Last summary: {result.summary}"
             )
         except Exception as e:
             log.error(f"Could not post escalation comment: {e}")

@@ -140,3 +140,22 @@ class TestConfig:
         c = Config()
         assert c.max_review_rounds_regular == 0
         assert c.max_review_rounds_complex == 3
+
+    def test_test_gate_defaults(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        c = Config()
+        assert c.test_gate_enabled is True
+        assert c.test_cmd is None
+        assert c.test_timeout == 1800
+
+    def test_test_gate_overrides(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("AGENT_TEST_GATE", "false")
+        monkeypatch.setenv("AGENT_TEST_CMD", "pytest -q")
+        monkeypatch.setenv("AGENT_TEST_TIMEOUT", "600")
+        c = Config()
+        assert c.test_gate_enabled is False
+        assert c.test_cmd == "pytest -q"
+        assert c.test_timeout == 600

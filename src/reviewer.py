@@ -4,20 +4,20 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List
+from typing import Callable, List, Literal
 
 log = logging.getLogger("agent")
 
 
 @dataclass
 class Finding:
-    severity: str  # "BLOCKING" or "NIT"
+    severity: Literal["BLOCKING", "NIT"]
     text: str
 
 
 @dataclass
 class ReviewResult:
-    verdict: str  # "OK" or "BLOCKING"
+    verdict: Literal["OK", "BLOCKING"]
     summary: str
     findings: List[Finding] = field(default_factory=list)
     raw_output: str = ""

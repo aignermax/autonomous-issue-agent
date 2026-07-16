@@ -48,3 +48,10 @@ class TestPromptTemplate:
         assert "{tools_dir}" in CONTINUATION_TEMPLATE
         assert "{tools_python}" in CONTINUATION_TEMPLATE
         assert "/home/aigner" not in CONTINUATION_TEMPLATE
+
+
+class TestReviewerCommentHygiene:
+    def test_reviewer_prompt_contains_comment_hygiene_backstop(self):
+        from src.prompt_template import REVIEWER_TEMPLATE
+        assert "Comment hygiene" in REVIEWER_TEMPLATE
+        assert "WHAT-comments" in REVIEWER_TEMPLATE
