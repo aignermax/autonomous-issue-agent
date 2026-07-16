@@ -472,6 +472,50 @@ class DashboardMonitor:
                 "state": state, "current_pr": current_pr,
                 "last_activity": last_activity}
 
+    def get_pr_feedback_status(self) -> dict:
+        """PR-feedback-agent status (process + heartbeat from pr-feedback-agent.log).
+
+        Same shape as get_qa_status; state is "working" (handling a marker
+        comment, current_pr set) or "polling".
+        """
+        fb_agents = [a for a in self.get_all_agent_processes() if a[2] == "pr-feedback"]
+        if not fb_agents:
+            return {"is_running": False, "pid": None, "duplicates": 0,
+                    "state": "stopped", "current_pr": None, "last_activity": None}
+
+        fb_agents.sort(key=lambda x: x[1], reverse=True)
+        pid, _start, _role = fb_agents[0]
+        duplicates = len(fb_agents) - 1
+
+        fb_log = self.working_dir / "pr-feedback-agent.log"
+        state = "polling"
+        current_pr = None
+        last_activity = None
+        if fb_log.exists():
+            try:
+                import re
+                last_activity = datetime.now() - datetime.fromtimestamp(fb_log.stat().st_mtime)
+                tail = tail_lines(fb_log, 200)
+                working_re = re.compile(r"\[pr-feedback\] PR #(\d+): handling comment")
+                done_re = re.compile(r"\[pr-feedback\] (sleeping|nothing to do)")
+                # Newest → oldest: worker-run output has no [pr-feedback]
+                # prefix, so the latest phase marker decides.
+                for line in reversed(tail):
+                    m = working_re.search(line)
+                    if m:
+                        state = "working"
+                        current_pr = int(m.group(1))
+                        break
+                    if done_re.search(line):
+                        state = "polling"
+                        break
+            except Exception:
+                pass
+
+        return {"is_running": True, "pid": pid, "duplicates": duplicates,
+                "state": state, "current_pr": current_pr,
+                "last_activity": last_activity}
+
     def _format_repo_name(self, repo_name: str) -> str:
         """Format repository name to first 4 chars + '-' + last 4 chars."""
         if not repo_name:
@@ -600,10 +644,11 @@ class Dashboard:
         return Panel(text, border_style="cyan")
 
     def create_agent_panel(self, status: AgentStatus) -> Panel:
-        """Create agent status panel (coder + QA roles)."""
+        """Create agent status panel (coder + QA + PR-feedback roles)."""
         qa = self.monitor.get_qa_status()
+        fb = self.monitor.get_pr_feedback_status()
 
-        if not status.is_running and not qa["is_running"]:
+        if not status.is_running and not qa["is_running"] and not fb["is_running"]:
             content = Text("[X] No agents running", style="bold red")
             return Panel(content, title="Agents Status", border_style="red")
 
@@ -747,14 +792,41 @@ class Dashboard:
                     activity_str, activity_color = f"{s // 60}m ago [!]", "red"
                 table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
 
-        # Border green only if both are healthy; red if both stopped; yellow otherwise
-        if status.is_running and qa["is_running"]:
+        # ── PR-Feedback Agent (reacts to @agent comments) ─────────────
+        if not fb["is_running"]:
+            table.add_row("PR-Feedback", Text("[X] not running", style="red"))
+        else:
+            if fb["state"] == "working":
+                fb_state_text = Text("[W] Working", style="bold blue")
+            elif fb["state"] == "polling":
+                fb_state_text = Text("[+] Polling", style="bold green")
+            else:
+                fb_state_text = Text(fb["state"], style="dim")
+            table.add_row("PR-Feedback", fb_state_text)
+            table.add_row("  PID", str(fb["pid"]))
+            if fb["duplicates"] > 0:
+                table.add_row("  WARNING",
+                              Text(f"{fb['duplicates'] + 1} pr-feedback agents running!", style="bold red"))
+            if fb["current_pr"]:
+                table.add_row("  Current PR", Text(f"#{fb['current_pr']}", style="magenta"))
+            if fb["last_activity"]:
+                s = int(fb["last_activity"].total_seconds())
+                if s < 60:
+                    activity_str, activity_color = f"{s}s ago", "green"
+                elif s < 1800:
+                    activity_str, activity_color = f"{s // 60}m ago", "green" if s < 300 else "yellow"
+                else:
+                    activity_str, activity_color = f"{s // 60}m ago [!]", "red"
+                table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
+
+        # Border green only if all are healthy; red if all stopped; yellow otherwise
+        if status.is_running and qa["is_running"] and fb["is_running"]:
             border = "green"
-        elif not status.is_running and not qa["is_running"]:
+        elif not status.is_running and not qa["is_running"] and not fb["is_running"]:
             border = "red"
         else:
             border = "yellow"
-        return Panel(table, title="Agents Status (Coder + QA)", border_style=border)
+        return Panel(table, title="Agents Status (Coder + QA + PR-Feedback)", border_style=border)
 
     def create_config_panel(self) -> Panel:
         """Create configuration panel showing monitored repositories with branch info"""
