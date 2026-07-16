@@ -2,6 +2,50 @@
 Prompt templates for Claude Code execution.
 """
 
+import re as _re
+
+# Appended to every coder prompt (initial + continuation). The block is
+# extracted via extract_pr_summary() and becomes the PR body — keeping PR
+# reports short, dense and reviewable at a glance instead of dumping the
+# worker's full final message.
+PR_SUMMARY_INSTRUCTION = """
+
+## 📝 PR Report Format — STRICT
+End your final message with EXACTLY this block (it becomes the PR
+description — the human reviews PRs quickly, so keep it DENSE):
+
+=== PR SUMMARY ===
+- <what changed, one bullet per change — short sentences, no filler>
+- <key decisions incl. UX decisions + rejected alternatives, if any>
+- <how it was verified: build/tests/screenshots>
+=== END ===
+
+Rules: 4-8 bullets total, max ~15 words each, no headings inside the
+block, no code dumps, no restating the issue text.
+"""
+
+_PR_SUMMARY_RE = _re.compile(
+    r"===\s*PR SUMMARY\s*===\s*(.*?)\s*===\s*END\s*===", _re.DOTALL
+)
+
+
+def extract_pr_summary(output: str, max_fallback_chars: int = 1200) -> str:
+    """Pull the dense `=== PR SUMMARY ===` block out of worker output.
+
+    Falls back to a bounded tail of the output so the PR body is never
+    empty — but never the unbounded full message.
+    """
+    if not output:
+        return ""
+    m = _PR_SUMMARY_RE.search(output)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    tail = output.strip()
+    if len(tail) > max_fallback_chars:
+        tail = "...\n" + tail[-max_fallback_chars:]
+    return tail
+
+
 CONTINUATION_TEMPLATE = """Continuing work on issue #{issue_number}: {issue_title}
 
 ## Progress So Far
@@ -115,7 +159,7 @@ These tools save 500-5000 tokens per use! Use them frequently!
 
 
 def build_prompt(issue, state=None, repo_name=None, tools_dir: str = "tools",
-                 tools_python: str = "python3") -> str:
+                 tools_python: str = "python3", complexity: str = "REGULAR") -> str:
     """
     Build the implementation prompt for Claude Code.
 
@@ -128,6 +172,9 @@ def build_prompt(issue, state=None, repo_name=None, tools_dir: str = "tools",
         tools_python: Path to the python interpreter that has the tools' deps
                       (e.g. ~/.cap-tools/venv/bin/python3). Defaults to plain
                       "python3" for backwards compatibility.
+        complexity: "COMPLEX" or "REGULAR". On "COMPLEX", a UX design pass is
+                    appended so the coder designs the interaction a real user
+                    needs (personas, flows) — not just the core logic.
 
     Returns:
         Formatted prompt string
@@ -169,6 +216,21 @@ repo:**
 4. **DO NOT waste tokens guessing** — the source code is available locally!
 """.format(tools_dir=tools_dir, tools_python=tools_python)
 
+    # UX design pass — only for COMPLEX issues. Pushes the coder past bare
+    # core logic into designing the interaction a real user actually needs.
+    ux_note = ""
+    if complexity == "COMPLEX":
+        ux_note = f"""
+
+## 🎨 UX Design Pass
+Don't stop at the core business logic — design the *interaction* a real user needs.
+1. **Personas:** Look for a "Personas" section in CLAUDE.md. If present, design explicitly from those personas' perspective — and if that section references another file (e.g. personas.md), read it first. If absent, reason briefly about the likely primary user — but don't fabricate elaborate personas.
+2. **Ask the design question, not just the code question:** decide the *right* interaction — is a plain button enough, or does the user need a dialog/wizard to understand it, inline validation, sensible defaults — or should the action just happen automatically (with feedback) so there's nothing to click at all? Consider discoverability, feedback, and error states.
+3. **Reuse existing patterns:** match the app's existing dialogs, styles, and MVVM conventions — don't invent inconsistent new UI.
+4. **You have full autonomy** to add whatever UI/flows/affordances make the feature genuinely understandable — implement them as part of this ticket (still a complete vertical slice with tests). Note the key UX decisions (and rejected alternatives) as bullets in your PR SUMMARY block.
+5. **Visual walkthrough (for the PR):** If this change adds or alters UI, capture the user flow so a reviewer sees it without checking out. Using the headless screenshot harness (see `UnitTests/UI/UiScreenshotTests.cs` for the Avalonia + Skia pattern), render the relevant view(s) in **each meaningful state** and save PNGs to `artifacts/ui-screenshots/issue-{issue.number}/` named in step order (e.g. `01-initial.png`, `02-after-click.png`, `03-result.png`), plus a `manifest.json` — a JSON array of `{{"file": "01-initial.png", "caption": "..."}}` in order. Captions: ONE short sentence — what the user sees/does in that step. The agent embeds these into the PR automatically — you do NOT need to touch the PR body.
+"""
+
     if state and state.session_count > 0:
         recent_notes = "\n".join(state.notes[-5:]) if state.notes else "No notes yet."
         return CONTINUATION_TEMPLATE.format(
@@ -181,7 +243,7 @@ repo:**
             recent_notes=recent_notes,
             tools_dir=tools_dir,
             tools_python=tools_python,
-        ) + workspace_note
+        ) + workspace_note + ux_note + PR_SUMMARY_INSTRUCTION
     return INITIAL_TEMPLATE.format(
         issue_number=issue.number,
         issue_title=issue.title,
@@ -189,7 +251,7 @@ repo:**
         issue_body=issue.body or "No description provided.",
         tools_dir=tools_dir,
         tools_python=tools_python,
-    ) + workspace_note
+    ) + workspace_note + ux_note + PR_SUMMARY_INSTRUCTION
 
 
 REVIEWER_TEMPLATE = """You are a senior code reviewer. Review PR #{pr_number} for issue #{issue_number}.
@@ -203,7 +265,7 @@ REVIEWER_TEMPLATE = """You are a senior code reviewer. Review PR #{pr_number} fo
 1. Read CLAUDE.md and AGENTS.md (if present) for project conventions.
 2. Inspect the PR diff:
    ```bash
-   git fetch origin {branch}
+   git fetch origin +{branch}:refs/remotes/origin/{branch}
    git diff origin/{base_branch}..origin/{branch}
    ```
 3. For deeper inspection, use:
@@ -419,6 +481,57 @@ def build_retry_prompt(issue, branch: str, review, tools_dir: str,
         review_summary=review.summary,
         findings_text=findings_text,
         branch=branch,
+        tools_dir=tools_dir,
+        tools_python=tools_python,
+    )
+
+
+PR_FEEDBACK_TEMPLATE = """A human reviewer left feedback on PR #{pr_number}
+(branch `{branch}`, title: {pr_title}). Implement what they asked for and
+push to the same branch.
+
+## Reviewer Feedback (verbatim)
+{comment_body}
+
+## Your Task
+1. Read CLAUDE.md for project conventions.
+2. Implement the requested change. Stay focused — only what the feedback
+   asks for (plus tests). Do not refactor unrelated code.
+3. Build and test:
+   ```bash
+   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
+   {tools_python} {tools_dir}/smart_test.py
+   ```
+4. **If the change affects UI:** re-render the visual walkthrough so the
+   reviewer sees the new state without checking out. Using the headless
+   screenshot harness (see `UnitTests/UI/UiScreenshotTests.cs` for the
+   Avalonia + Skia pattern), save step-ordered PNGs to
+   `artifacts/ui-screenshots/issue-{issue_number}/` (e.g. `01-initial.png`,
+   `02-after-click.png`) plus a `manifest.json` array of
+   `{{"file": "...", "caption": "..."}}` entries (captions: ONE short
+   sentence each). They are embedded into a reply comment automatically.
+5. Commit to branch `{branch}`. Do NOT open a new PR.
+
+End your final message with EXACTLY this block (parsed by tooling; 3-6
+short bullet lines describing what you changed and why):
+
+=== FEEDBACK REPORT ===
+- <what changed>
+- <what changed>
+=== END ===
+"""
+
+
+def build_pr_feedback_prompt(pr, branch: str, comment_body: str,
+                             issue_number: int, tools_dir: str = "tools",
+                             tools_python: str = "python3") -> str:
+    """Build the prompt for the PR-feedback worker (human comment → fix)."""
+    return PR_FEEDBACK_TEMPLATE.format(
+        pr_number=pr.number,
+        pr_title=getattr(pr, "title", ""),
+        branch=branch,
+        comment_body=comment_body or "(empty comment)",
+        issue_number=issue_number,
         tools_dir=tools_dir,
         tools_python=tools_python,
     )

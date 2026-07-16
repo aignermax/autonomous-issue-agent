@@ -50,7 +50,7 @@ def main():
     parser = argparse.ArgumentParser(description="Autonomous Issue Agent")
     parser.add_argument("--once", nargs='?', const=True, type=int,
                         help="Run once and exit (optionally specify issue number)")
-    parser.add_argument("--role", choices=["coder", "qa"], default="coder",
+    parser.add_argument("--role", choices=["coder", "qa", "pr-feedback"], default="coder",
                         help="Which agent role to run (default: coder)")
     parser.add_argument("--cleanup-worktrees", action="store_true",
                         help="Remove worktrees for closed/merged PRs and exit (coder role only)")
@@ -115,6 +115,21 @@ def main():
         if args.once is not None:
             if isinstance(args.once, int):
                 log.warning("--once <issue_number> is not supported for the qa role; running a single cycle instead")
+            log.info("Running in single-iteration mode")
+            agent.run_once()
+        else:
+            log.info("Running in continuous polling mode")
+            agent.run_forever()
+    elif args.role == "pr-feedback":
+        if args.cleanup_worktrees:
+            log.error("--cleanup-worktrees is only valid for the coder role")
+            sys.exit(2)
+        from src.agents.pr_feedback_agent import PRFeedbackAgent
+        log.info("Starting in PR-feedback role — reacting to marker comments on agent PRs")
+        agent = PRFeedbackAgent(config)
+        if args.once is not None:
+            if isinstance(args.once, int):
+                log.warning("--once <issue_number> is not supported for the pr-feedback role; running a single cycle instead")
             log.info("Running in single-iteration mode")
             agent.run_once()
         else:

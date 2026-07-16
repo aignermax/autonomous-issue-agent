@@ -37,17 +37,31 @@ command -v cmake &> /dev/null && echo "  ✅ CMake $(cmake --version 2>/dev/null
 command -v wix &> /dev/null && echo "  ✅ WiX Toolset $(wix --version 2>/dev/null || echo 'v7')" || echo "  ⚠️  WiX not found"
 echo ""
 
-# Start agent in background (with suspend inhibit if available)
-echo "Starting agent in background..."
+# Start coder + QA agents in background. Both roles must run for a fully
+# autonomous loop: the coder writes/reviews code, the QA agent runs tests
+# against the resulting PRs and posts a verdict (which the coder then
+# reacts to via its qa-fix flow).
+echo "Starting agents in background..."
 if command -v gnome-session-inhibit &> /dev/null; then
-    # GNOME: Prevent sleep while agent runs
-    nohup gnome-session-inhibit --inhibit suspend,idle --who "CAP Agent" --what "Processing GitHub issues" --why "Autonomous agent running" python3 main.py > /dev/null 2>&1 &
+    nohup gnome-session-inhibit --inhibit suspend,idle --who "CAP Agent" --what "Processing GitHub issues" --why "Autonomous coder agent" python3 main.py > /dev/null 2>&1 &
     AGENT_PID=$!
-    echo "✅ Agent started with sleep prevention (PID: $AGENT_PID)"
+    nohup gnome-session-inhibit --inhibit suspend,idle --who "CAP QA Agent" --what "Verifying agent PRs" --why "Autonomous QA agent" python3 main.py --role qa > qa-agent.log 2>&1 &
+    QA_PID=$!
+    nohup gnome-session-inhibit --inhibit suspend,idle --who "CAP PR-Feedback Agent" --what "Handling PR feedback comments" --why "Autonomous PR-feedback agent" python3 main.py --role pr-feedback > pr-feedback-agent.log 2>&1 &
+    FB_PID=$!
+    echo "✅ Coder started with sleep prevention (PID: $AGENT_PID)"
+    echo "✅ QA agent started with sleep prevention (PID: $QA_PID)"
+    echo "✅ PR-feedback agent started with sleep prevention (PID: $FB_PID)"
 else
     nohup python3 main.py > /dev/null 2>&1 &
     AGENT_PID=$!
-    echo "✅ Agent started (PID: $AGENT_PID)"
+    nohup python3 main.py --role qa > qa-agent.log 2>&1 &
+    QA_PID=$!
+    nohup python3 main.py --role pr-feedback > pr-feedback-agent.log 2>&1 &
+    FB_PID=$!
+    echo "✅ Coder started (PID: $AGENT_PID)"
+    echo "✅ QA agent started (PID: $QA_PID)"
+    echo "✅ PR-feedback agent started (PID: $FB_PID)"
     echo "⚠️  Note: gnome-session-inhibit not found - system may sleep"
 fi
 sleep 2

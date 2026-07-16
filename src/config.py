@@ -63,6 +63,20 @@ class Config:
             "AGENT_REVIEWER_MODEL", "claude-sonnet-4-6")
         self.reviewer_model_critical: str = os.environ.get(
             "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-7")
+        # Coder (worker) model. None => use the Claude Code CLI default.
+        # Set AGENT_CODER_MODEL (e.g. "claude-fable-5") to override.
+        self.coder_model: Optional[str] = os.environ.get("AGENT_CODER_MODEL") or None
+
+        # PR-feedback role: reacts to human PR comments containing the marker,
+        # implements the requested change, and replies with fresh screenshots.
+        # Marker-based by design — agent comments post under the same token
+        # (same GitHub user), so author filtering cannot tell them apart.
+        self.pr_feedback_marker: str = os.environ.get(
+            "AGENT_PR_FEEDBACK_MARKER", "@agent")
+        self.pr_feedback_max_rounds: int = int(
+            os.environ.get("AGENT_PR_FEEDBACK_MAX_ROUNDS", "3"))
+        self.pr_feedback_max_turns: int = int(
+            os.environ.get("AGENT_PR_FEEDBACK_MAX_TURNS", "120"))
         self.critical_label: str = os.environ.get("AGENT_CRITICAL_LABEL", "critical")
         self.reviewer_max_turns: int = int(os.environ.get("AGENT_REVIEWER_MAX_TURNS", "80"))
 

@@ -276,12 +276,12 @@ class Agent:
 
             # Try to assign issue to current user (persistent lock across agents)
             try:
-                # Get current authenticated user
-                user = self.github.repo.organization or self.github.repo.owner
-                username = self.github.repo._requester._Requester__auth._Auth__token  # Get auth info
-                # Assign to current user - this persists even if agent crashes
-                issue.add_to_assignees(self.github.repo.owner.login)
-                log.info(f"Assigned issue #{issue_num} to {self.github.repo.owner.login} for persistent lock")
+                # Assign to the token's user — persists even if agent crashes.
+                # NOT repo.owner: for org-owned repos that is the org slug,
+                # which GitHub silently ignores (no lock at all).
+                assignee = self.github.authenticated_login()
+                issue.add_to_assignees(assignee)
+                log.info(f"Assigned issue #{issue_num} to {assignee} for persistent lock")
             except Exception as assign_error:
                 log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
                 log.warning("Lock will only be via label removal (less reliable for multi-agent)")
@@ -355,7 +355,10 @@ class Agent:
         remote_exists = self.git.run("ls-remote", "--heads", "origin", branch)
         if remote_exists.returncode == 0 and branch in remote_exists.stdout:
             log.info(f"Fetching and checking out remote branch: {branch}")
-            self.git.run("fetch", "origin", branch)
+            # Refspec updates refs/remotes/origin/<branch>; without it, plain
+            # `fetch origin BRANCH` only touches FETCH_HEAD and a follow-up
+            # checkout against origin/<branch> would use the stale ref.
+            self.git.run("fetch", "origin", f"+{branch}:refs/remotes/origin/{branch}")
             self.git.run("checkout", "-b", branch, f"origin/{branch}")
             return
 
@@ -463,12 +466,27 @@ class Agent:
         else:
             pr_body_suffix += "\n**Custom Tools Used:** None\n"
 
+        # Publish any UI-flow screenshots onto the branch and build a visual
+        # walkthrough. Non-fatal: returns "" if none / on error. Runs BEFORE
+        # the existing-PR shortcuts below so every path gets the walkthrough,
+        # not just freshly created PRs.
+        from .pr_media import publish_walkthrough
+        walkthrough = publish_walkthrough(
+            self.git, self.current_repo_name, branch, issue.number
+        )
+
+        # Dense PR body: only the worker's PR SUMMARY block (bounded fallback),
+        # never the full final message — the human reviews these at a glance.
+        from .prompt_template import extract_pr_summary
+        summary = extract_pr_summary(output)
+
         # Check if Claude Code already created a PR
         import re
         pr_url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/\d+', output)
         if pr_url_match:
             pr_url = pr_url_match.group(0)
             log.info(f"Claude Code already created PR: {pr_url}")
+            self._attach_walkthrough(self.github.get_pr_by_branch(branch), walkthrough)
             return pr_url
 
         # Check if PR already exists for this branch
@@ -476,6 +494,7 @@ class Agent:
         if existing_pr:
             pr_url = existing_pr.html_url
             log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
+            self._attach_walkthrough(existing_pr, walkthrough)
             return pr_url
 
         # Create new PR
@@ -493,9 +512,10 @@ class Agent:
             pr_url = self.github.create_pull_request(
                 branch, issue,
                 body_suffix=pr_body_suffix,
-                summary=output,
+                summary=summary,
                 base=base_branch,
-                previous_pr_number=previous_pr_number
+                previous_pr_number=previous_pr_number,
+                walkthrough=walkthrough,
             )
         except Exception as e:
             error_str = str(e).lower()
@@ -506,6 +526,7 @@ class Agent:
                 if existing_pr:
                     pr_url = existing_pr.html_url
                     log.info(f"Found existing PR #{existing_pr.number}: {pr_url}")
+                    self._attach_walkthrough(existing_pr, walkthrough)
                 else:
                     log.error(f"PR exists but couldn't find it for branch {branch}")
                     raise
@@ -514,14 +535,31 @@ class Agent:
                 pr_url = self.github.create_pull_request(
                     branch, issue,
                     body_suffix=pr_body_suffix,
-                    summary=output,
+                    summary=summary,
                     base=default_branch,
-                    previous_pr_number=None
+                    previous_pr_number=None,
+                    walkthrough=walkthrough,
                 )
             else:
                 raise
 
         return pr_url
+
+    @staticmethod
+    def _attach_walkthrough(pr, walkthrough: str) -> None:
+        """Insert/refresh the walkthrough section in an existing PR's body.
+
+        No-op on empty walkthrough or missing PR. Never raises — a body edit
+        must not take down the pipeline.
+        """
+        if not walkthrough or pr is None:
+            return
+        from .pr_media import merge_walkthrough_into_body
+        try:
+            pr.edit(body=merge_walkthrough_into_body(pr.body, walkthrough))
+            log.info(f"Walkthrough attached to PR #{pr.number}")
+        except Exception as e:
+            log.warning(f"Could not attach walkthrough to PR #{pr.number}: {e}")
 
     def _handle_error(self, issue, state: SessionState, branch: str, error: Exception) -> IssueResult:
         """Handle errors during issue processing."""
@@ -530,13 +568,16 @@ class Agent:
         state.add_note(f"Error: {str(error)[:200]}")
         self.session_manager.save_state(state)
 
-        # Re-add label for retry (max 3 attempts)
+        # Re-add label for retry (max 3 attempts). Also release the assignee
+        # lock — find_next_issue skips assigned issues, so leaving the
+        # assignment in place would permanently block the retry.
         if state.session_count < 3:
             try:
                 log.info(f"Re-adding agent-task label to issue #{issue_num} after failure (attempt {state.session_count}/3)")
                 issue.add_to_labels(self.config.issue_label)
             except Exception as label_error:
                 log.warning(f"Could not re-add label: {label_error}")
+            self._release_assignee_lock(issue)
         else:
             log.error(f"Issue #{issue_num} failed {state.session_count} times, giving up.")
             log.error(f"Manual intervention required. Last error: {str(error)[:500]}")
@@ -553,6 +594,24 @@ class Agent:
 
         return IssueResult(success=False, branch=branch, error=str(error))
 
+    def _release_assignee_lock(self, issue) -> None:
+        """Remove the agent's assignee lock so the issue can be picked up again."""
+        try:
+            if issue.assignees:
+                issue.remove_from_assignees(*issue.assignees)
+                log.info(f"Released assignee lock on issue #{issue.number}")
+        except Exception as e:
+            log.warning(f"Could not release assignee lock on issue #{issue.number}: {e}")
+
+    def _rollback_claim(self, issue) -> None:
+        """Undo a fresh claim (label back + assignee off) after a setup failure."""
+        try:
+            issue.add_to_labels(self.config.issue_label)
+            log.info(f"Rolled back claim: re-added '{self.config.issue_label}' to issue #{issue.number}")
+        except Exception as e:
+            log.warning(f"Could not re-add label during claim rollback: {e}")
+        self._release_assignee_lock(issue)
+
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
         Build the implementation prompt for Claude Code.
@@ -567,12 +626,14 @@ class Agent:
         from .prompt_template import build_prompt
         tools_dir = str(self.config.tools_dir) if self.config.tools_dir else "tools"
         tools_python = str(self.config.tools_python) if self.config.tools_python else "python3"
+        _, _, complexity = self._detect_issue_complexity(issue)
         return build_prompt(
             issue,
             state=state,
             repo_name=self.current_repo_name,
             tools_dir=tools_dir,
             tools_python=tools_python,
+            complexity=complexity,
         )
 
     def process_issue(self, issue) -> IssueResult:
@@ -588,11 +649,24 @@ class Agent:
         else:
             branch = self._claim_issue_and_create_branch(issue)
 
-        worktree_path = self.worktrees.create(
-            repo_path=self.git.path,
-            branch=branch,
-            base=self.git.get_working_branch(),
-        )
+        # Make sure local source clone exists before any git command runs
+        # against it — first-time pickup of a new repo would otherwise crash
+        # in get_working_branch() (git ls-remote in a missing dir).
+        # This runs AFTER the issue was claimed, so a transient failure here
+        # (network blip during fetch/pull) must roll the claim back —
+        # otherwise the issue sits label-less and assigned forever.
+        try:
+            self.git.ensure_cloned()
+            worktree_path = self.worktrees.create(
+                repo_path=self.git.path,
+                branch=branch,
+                base=self.git.get_working_branch(),
+            )
+        except Exception as e:
+            log.exception(f"Worktree setup failed for issue #{issue_num} — rolling back claim")
+            if not existing_state:
+                self._rollback_claim(issue)
+            return IssueResult(success=False, branch=branch, error=f"worktree setup failed: {e}")
         log.info(f"Using worktree: {worktree_path}")
 
         max_turns, _, _ = self._detect_issue_complexity(issue)
@@ -601,7 +675,7 @@ class Agent:
             remote_url=self.git.remote_url,
             default_branch=self.git.default_branch,
         )
-        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns, model=self.config.coder_model)
 
         original_git, original_claude = self.git, self.claude
         self.git, self.claude = worktree_git, worktree_claude
@@ -794,7 +868,7 @@ class Agent:
                 tools_dir=tools_dir, tools_python=tools_python,
             )
             max_turns, _, _ = self._detect_issue_complexity(issue)
-            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns, model=self.config.coder_model)
             log.info(f"Re-running worker for round {round_num + 1}")
             _output, reached_max, _usage = worker.execute(retry_prompt)
             if reached_max:
@@ -808,6 +882,15 @@ class Agent:
                 message=f"Address review feedback (round {round_num + 1})",
                 base_branch=base_branch,
             )
+
+            # If the retry regenerated UI screenshots, refresh the PR body's
+            # walkthrough — otherwise it keeps showing the pre-review UI.
+            from .pr_media import publish_walkthrough
+            walkthrough = publish_walkthrough(
+                self.git, getattr(self, "current_repo_name", None),
+                branch, issue.number,
+            )
+            self._attach_walkthrough(pr, walkthrough)
 
         return False  # unreachable, but keeps type stable
 
@@ -893,7 +976,9 @@ class Agent:
             default_branch=self.git.default_branch,
         )
         # Align worktree with the latest origin state of the PR branch.
-        worktree_git.run("fetch", "origin", branch)
+        # Refspec is required so refs/remotes/origin/<branch> is updated;
+        # without it, `reset --hard origin/<branch>` would use a stale ref.
+        worktree_git.run("fetch", "origin", f"+{branch}:refs/remotes/origin/{branch}")
         worktree_git.run("checkout", branch)
         worktree_git.run("reset", "--hard", f"origin/{branch}")
         worktree_git.run("clean", "-fdx")
@@ -916,7 +1001,7 @@ class Agent:
         else:
             max_turns = self.config.max_turns_regular
 
-        worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns)
+        worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns, model=self.config.coder_model)
         log.info(f"Running QA-fix worker for PR #{pr.number} (round {failures + 1}/{max_rounds})")
         try:
             output, reached_max, usage = worker.execute(prompt)
@@ -995,7 +1080,7 @@ class Agent:
         repo_slug = repo_name.replace("/", "_")
         local_path = self.config.local_path.parent / f"repo_{repo_slug}"
         self.git = GitRepo(local_path, remote, self.github.default_branch)
-        self.claude = ClaudeCode(local_path, self.config.max_turns)
+        self.claude = ClaudeCode(local_path, self.config.max_turns, model=self.config.coder_model)
         log.info(f"Setup complete for {repo_name} → {local_path}")
 
         self._sync_codegraph_index(local_path)
