@@ -1471,11 +1471,19 @@ class Agent:
         log.info(f"Agent started. Polling every {self.config.poll_interval}s.")
         log.info(f"Repositories: {', '.join(self.config.repo_names)} | Activation Label: {self.config.issue_label} | Complexity Tag: {self.config.complexity_tag}")
 
+        from .backoff import backoff_seconds
+        failures = 0
         while True:
             try:
                 self.run_once()
-            except Exception as e:
+                failures = 0
+            except Exception:
+                failures += 1
                 log.exception("Unexpected error in poll loop")
 
-            log.info(f"Sleeping {self.config.poll_interval}s ...")
-            time.sleep(self.config.poll_interval)
+            sleep_s = backoff_seconds(failures, self.config.poll_interval)
+            if failures:
+                log.info(f"Backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")
+            else:
+                log.info(f"Sleeping {sleep_s}s ...")
+            time.sleep(sleep_s)

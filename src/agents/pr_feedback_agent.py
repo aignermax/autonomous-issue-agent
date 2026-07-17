@@ -246,13 +246,21 @@ class PRFeedbackAgent:
             f"Polling every {self.config.poll_interval}s. "
             f"Repositories: {', '.join(self.config.repo_names)}"
         )
+        from ..backoff import backoff_seconds
+        failures = 0
         while True:
             try:
                 self.run_once()
+                failures = 0
             except Exception:
+                failures += 1
                 log.exception("[pr-feedback] unexpected error in poll loop")
-            log.info(f"[pr-feedback] sleeping {self.config.poll_interval}s ...")
-            time.sleep(self.config.poll_interval)
+            sleep_s = backoff_seconds(failures, self.config.poll_interval)
+            if failures:
+                log.info(f"[pr-feedback] backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")
+            else:
+                log.info(f"[pr-feedback] sleeping {sleep_s}s ...")
+            time.sleep(sleep_s)
 
     # -- feedback handling ------------------------------------------------
 
