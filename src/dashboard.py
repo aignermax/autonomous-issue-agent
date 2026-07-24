@@ -105,6 +105,11 @@ class DashboardMonitor:
         self.sessions_dir = working_dir / ".sessions"
         self.agent_log = working_dir / "agent.log"
         self.console = Console()
+        # One refresh renders several panels, each needing the process list.
+        # Scanning all processes is expensive under WSL — cache briefly so a
+        # single refresh does exactly one scan.
+        self._proc_cache: list = []
+        self._proc_cache_at: float = 0.0
 
     def get_process_info(self, pattern: str) -> Optional[Tuple[int, datetime]]:
         """Get PID and start time of a process matching pattern"""
@@ -178,7 +183,13 @@ class DashboardMonitor:
         the default `python main.py` invocation and "qa" when `--role qa`
         appears in the cmdline. Coder + QA run side-by-side and must not be
         treated as duplicates of each other.
+
+        Cached ~1.5s: one dashboard refresh calls this from several panels.
         """
+        now = time.time()
+        if self._proc_cache and now - self._proc_cache_at < 1.5:
+            return self._proc_cache
+
         agents = []
         try:
             import psutil
@@ -246,6 +257,8 @@ class DashboardMonitor:
             except:
                 pass
 
+        self._proc_cache = agents
+        self._proc_cache_at = now
         return agents
 
     def get_agent_status(self) -> AgentStatus:
@@ -573,8 +586,9 @@ class DashboardMonitor:
                 continue
 
         # Fallback for the pre-JSONL era: parse the recent log tail. Never
-        # overwrites a persisted record.
-        if self.agent_log.exists():
+        # overwrites a persisted record — and once the JSONL alone fills the
+        # panel, skip log archaeology entirely (it's the expensive path).
+        if len(history) < limit and self.agent_log.exists():
             try:
                 lines = tail_lines(self.agent_log, 5000, max_bytes=524288)
 
@@ -875,10 +889,14 @@ class Dashboard:
             border = "yellow"
         return Panel(table, title="Agents Status (Coder + QA + PR-Feedback)", border_style=border)
 
-    def create_config_panel(self) -> Panel:
+    def create_config_panel(self, agent_status: Optional[AgentStatus] = None) -> Panel:
         """Create configuration panel showing monitored repositories with branch info"""
-        from dotenv import load_dotenv
-        load_dotenv(self.monitor.working_dir / ".env")
+        # .env is static config — load once per dashboard lifetime, not per
+        # 2s refresh.
+        if not getattr(self, "_dotenv_loaded", False):
+            from dotenv import load_dotenv
+            load_dotenv(self.monitor.working_dir / ".env")
+            self._dotenv_loaded = True
 
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("Setting", style="cyan", width=18)
@@ -892,8 +910,10 @@ class Dashboard:
             # Fallback to single repo mode
             repos = [os.environ.get("AGENT_REPO", "Not configured")]
 
-        # Check if agent is actively working to skip expensive API calls
-        agent_status = self.monitor.get_agent_status()
+        # Reuse the status the caller already fetched (a refresh must not
+        # re-run the whole log/process scan just for this panel).
+        if agent_status is None:
+            agent_status = self.monitor.get_agent_status()
         skip_api_calls = agent_status.is_running
 
         # Display repository list with branch info
@@ -1052,7 +1072,7 @@ class Dashboard:
         # Update layout
         layout["header"].update(self.create_header())
         layout["agent"].update(self.create_agent_panel(agent_status))
-        layout["mcp"].update(self.create_config_panel())
+        layout["mcp"].update(self.create_config_panel(agent_status))
         layout["history"].update(self.create_history_panel(history))
 
         # Footer
