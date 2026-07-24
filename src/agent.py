@@ -582,6 +582,17 @@ class Agent:
         else:
             log.error(f"Issue #{issue_num} failed {state.session_count} times, giving up.")
             log.error(f"Manual intervention required. Last error: {str(error)[:500]}")
+            from .history import append_issue_history
+            append_issue_history(
+                self.config.session_dir,
+                number=issue_num, title=getattr(issue, "title", ""),
+                repository=self.current_repo_name or "",
+                completed=False,
+                total_tokens=state.total_tokens,
+                total_cost_usd=state.total_cost_usd,
+                session_count=state.session_count,
+                started_at=state.started_at,
+            )
             try:
                 import socket
                 hostname = socket.gethostname()
@@ -805,6 +816,20 @@ class Agent:
             state.add_note(f"PR created: {pr_url}")
             self.session_manager.save_state(state)
             self.session_manager.delete_state(issue_num)
+
+            # Persist to the dashboard's issue history (survives restarts —
+            # unlike log parsing, which only sees the recent log tail).
+            from .history import append_issue_history
+            append_issue_history(
+                self.config.session_dir,
+                number=issue_num, title=issue.title,
+                repository=self.current_repo_name or "",
+                completed=True, pr_url=pr_url,
+                total_tokens=state.total_tokens,
+                total_cost_usd=state.total_cost_usd,
+                session_count=state.session_count,
+                started_at=state.started_at,
+            )
 
             log.info(f"PR created: {pr_url}")
             return IssueResult(success=True, branch=branch, pr_url=pr_url)

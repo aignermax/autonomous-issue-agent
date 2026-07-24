@@ -79,6 +79,7 @@ class AgentStatus:
     issue_complexity: Optional[str] = None  # "REGULAR" or "COMPLEX"
     current_branch: Optional[str] = None  # Working branch (e.g., "agent/issue-110-...")
     current_pr: Optional[int] = None  # PR number when state is "reviewing" or "qa"
+    current_repo: Optional[str] = None  # Repo the coder is working in (owner/name)
 
 
 @dataclass
@@ -272,6 +273,7 @@ class DashboardMonitor:
         current_issue = None
         current_pr = None
         current_branch = None
+        current_repo = None
         next_poll_in = None
         current_turn = None
         max_turns = None
@@ -306,6 +308,12 @@ class DashboardMonitor:
                         if m:
                             current_branch = m.group(1)
 
+                    # Coder-only line ("[qa]"/"[pr-feedback]" prefix theirs);
+                    # forward pass → ends at the most recent repo visited.
+                    m = re.search(r'\] Checking repository: (\S+)', line)
+                    if m and "[qa]" not in line and "[pr-feedback]" not in line:
+                        current_repo = m.group(1)
+
                 # Phase detection: walk from newest to oldest and pick the
                 # first phase marker we see. Reviewer / QA logs come BEFORE
                 # their own "Invoking Claude Code" line — so checking phase
@@ -317,7 +325,7 @@ class DashboardMonitor:
                     r'|\[qa\] verifying PR #(\d+)'
                 )
                 phase_re_review = re.compile(r'Reviewer running on PR #(\d+)')
-                phase_re_worker = re.compile(r'Found issue #(\d+)')
+                phase_re_worker = re.compile(r'Found issue #(\d+)(?: in (\S+):)?')
                 phase_re_sleep = re.compile(r'Sleeping (\d+)s')
                 phase_re_ts = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
 
@@ -350,6 +358,8 @@ class DashboardMonitor:
                     if m:
                         state = "working"
                         current_issue = int(m.group(1))
+                        if m.group(2):
+                            current_repo = m.group(2)
                         ts = phase_re_ts.search(line)
                         if ts:
                             session_start_time = datetime.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S")
@@ -372,9 +382,11 @@ class DashboardMonitor:
                 # issue number is still useful context — find it independently.
                 if state in ("reviewing", "qa") and current_issue is None:
                     for l in reversed(lines):
-                        m = re.search(r'Found issue #(\d+)', l)
+                        m = re.search(r'Found issue #(\d+)(?: in (\S+):)?', l)
                         if m:
                             current_issue = int(m.group(1))
+                            if m.group(2):
+                                current_repo = m.group(2)
                             break
 
             except Exception:
@@ -421,7 +433,8 @@ class DashboardMonitor:
         return AgentStatus(
             True, pid, current_issue, current_turn, max_turns,
             state, next_poll_in, last_activity, cpu_percent, session_duration,
-            duplicate_count, issue_complexity, current_branch, current_pr
+            duplicate_count, issue_complexity, current_branch, current_pr,
+            current_repo
         )
 
     def get_qa_status(self) -> dict:
@@ -525,11 +538,42 @@ class DashboardMonitor:
         return f"{repo_name[:4]}-{repo_name[-4:]}"
 
     def get_issue_history(self, limit: int = 10) -> List[IssueHistory]:
-        """Get recent issue history from agent.log"""
+        """Recent issue history: persisted JSONL first, log parsing as fallback."""
         history = {}  # Use dict to deduplicate by issue number
 
-        # Parse agent.log for issue completions. Bounded tail — this runs on
-        # every refresh and the log grows unbounded.
+        # Authoritative source: .sessions/issue-history.jsonl, written by the
+        # agent at completion time. Survives dashboard restarts and log
+        # rotation — the log tail below only covers the recent past.
+        try:
+            from history import read_issue_history
+        except ImportError:
+            from .history import read_issue_history
+        for rec in read_issue_history(self.sessions_dir, limit=limit):
+            try:
+                ts = None
+                if rec.get("timestamp"):
+                    ts = datetime.strptime(rec["timestamp"], "%Y-%m-%d %H:%M:%S")
+                dur = None
+                if rec.get("duration_sec") is not None:
+                    dur = timedelta(seconds=int(rec["duration_sec"]))
+                history[int(rec["number"])] = IssueHistory(
+                    number=int(rec["number"]),
+                    title=rec.get("title", ""),
+                    completed=bool(rec.get("completed")),
+                    pr_url=rec.get("pr_url"),
+                    total_tokens=int(rec.get("total_tokens", 0)),
+                    total_cost_usd=float(rec.get("total_cost_usd", 0.0)),
+                    session_count=int(rec.get("session_count", 0)),
+                    repository=self._format_repo_name(
+                        (rec.get("repository") or "").split("/")[-1]),
+                    timestamp=ts,
+                    duration=dur,
+                )
+            except (KeyError, ValueError, TypeError):
+                continue
+
+        # Fallback for the pre-JSONL era: parse the recent log tail. Never
+        # overwrites a persisted record.
         if self.agent_log.exists():
             try:
                 lines = tail_lines(self.agent_log, 5000, max_bytes=524288)
@@ -581,8 +625,9 @@ class DashboardMonitor:
                                         except:
                                             pass
 
-                            # Only add if we found token info or PR
-                            if tokens > 0 or pr_url:
+                            # Only add if we found token info or PR — and no
+                            # persisted record exists (JSONL is authoritative).
+                            if (tokens > 0 or pr_url) and issue_num not in history:
                                 history[issue_num] = IssueHistory(
                                     number=issue_num,
                                     title="",
@@ -690,6 +735,8 @@ class Dashboard:
                 else:
                     issue_display = f"#{status.current_issue}"
                 table.add_row("  Current Issue", issue_display)
+                if status.current_repo:
+                    table.add_row("  Repository", Text(status.current_repo, style="magenta"))
                 if status.current_pr:
                     table.add_row("  Current PR", Text(f"#{status.current_pr}", style="magenta"))
                 if status.current_branch:
