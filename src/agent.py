@@ -131,6 +131,15 @@ class Agent:
         if not issue.body:
             return None
 
+        # Team/base-branch declarations are handled by
+        # _extract_team_branch_from_issue and mean something different (the
+        # branch to fork FROM, not to work ON). Strip them first — otherwise
+        # "Team branch: team/x" / "base branch = team/x" match the generic
+        # "branch:"/"branch=" patterns below and the agent would commit
+        # directly to the team branch.
+        body = re.sub(r'(?:team|base)\s+branch\s*[:=][^\n]*', '',
+                      issue.body, flags=re.IGNORECASE)
+
         # Pattern: matches "branch: something" or "branch:something"
         # Order matters: try most specific patterns first
         patterns = [
@@ -141,7 +150,7 @@ class Agent:
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, issue.body, re.IGNORECASE | re.DOTALL)
+            match = re.search(pattern, body, re.IGNORECASE | re.DOTALL)
             if match:
                 branch_name = match.group(1).strip()
                 # Clean up markdown formatting: **`branch`** -> branch
@@ -182,6 +191,11 @@ class Agent:
                 branch_name = re.sub(r'[*`]+', '', match.group(1)).strip()
                 # GitHub renders empty optional form fields as "_No response_"
                 if not branch_name or branch_name.lower().startswith('_no'):
+                    return None
+                # A leading "-" would be parsed as an option by every git
+                # command this value is handed to — never accept it.
+                if branch_name.startswith('-'):
+                    log.warning(f"Ignoring suspicious team branch value: {branch_name!r}")
                     return None
                 log.info(f"Found team base branch in issue body: {branch_name}")
                 return branch_name
@@ -670,6 +684,11 @@ class Agent:
             log.warning(f"Could not re-add label during claim rollback: {e}")
         self._release_assignee_lock(issue)
 
+    def _branch_exists_on_origin(self, branch: str) -> bool:
+        """True if `branch` exists on the remote (ls-remote heads)."""
+        result = self.git.run("ls-remote", "--heads", "origin", branch)
+        return result.returncode == 0 and bool(result.stdout.strip())
+
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
         Build the implementation prompt for Claude Code.
@@ -716,6 +735,32 @@ class Agent:
         try:
             self.git.ensure_cloned()
             team_branch = self._extract_team_branch_from_issue(issue)
+
+            # A declared-but-nonexistent team branch is a permanent config
+            # error, not a transient failure: rolling the claim back would
+            # make the poll loop re-claim (and re-comment) forever. Escalate
+            # to a human once instead.
+            if team_branch and not self._branch_exists_on_origin(team_branch):
+                log.error(
+                    f"Issue #{issue_num} declares team branch '{team_branch}' "
+                    "which does not exist on origin — escalating to human."
+                )
+                try:
+                    issue.create_comment(
+                        f"⚠️ This issue declares team branch `{team_branch}`, "
+                        "but that branch does not exist on the repository. "
+                        "Please create the branch or fix the field, then "
+                        f"re-add the `{self.config.issue_label}` label."
+                    )
+                    issue.add_to_labels("needs-human")
+                except Exception as comment_error:
+                    log.warning(f"Could not escalate issue #{issue_num}: {comment_error}")
+                self._release_assignee_lock(issue)
+                return IssueResult(
+                    success=False, branch=branch,
+                    error=f"team branch '{team_branch}' not found on origin",
+                )
+
             worktree_path = self.worktrees.create(
                 repo_path=self.git.path,
                 branch=branch,
