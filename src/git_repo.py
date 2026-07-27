@@ -113,6 +113,16 @@ class GitRepo:
                     f"{CLONE_GIT_TIMEOUT_SEC}s"
                 )
         else:
+            # Linked worktree (.git is a file, not a dir): its dedicated
+            # branch is already checked out and the shared working branch
+            # belongs to the primary clone — `git checkout main` here ALWAYS
+            # fails ("already used by worktree") and the pull/reset below
+            # would target the wrong branch. Fetch (shared object store) and
+            # stop; branch management is the caller's job in a worktree.
+            if (self.path / ".git").is_file():
+                self.run("fetch", "origin", timeout=CLONE_GIT_TIMEOUT_SEC)
+                return
+
             # CRITICAL: Clean any uncommitted changes first to avoid conflicts
             self._ensure_clean_state()
 
