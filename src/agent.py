@@ -131,6 +131,15 @@ class Agent:
         if not issue.body:
             return None
 
+        # Team/base-branch declarations are handled by
+        # _extract_team_branch_from_issue and mean something different (the
+        # branch to fork FROM, not to work ON). Strip them first — otherwise
+        # "Team branch: team/x" / "base branch = team/x" match the generic
+        # "branch:"/"branch=" patterns below and the agent would commit
+        # directly to the team branch.
+        body = re.sub(r'(?:team|base)\s+branch\s*[:=][^\n]*', '',
+                      issue.body, flags=re.IGNORECASE)
+
         # Pattern: matches "branch: something" or "branch:something"
         # Order matters: try most specific patterns first
         patterns = [
@@ -141,12 +150,54 @@ class Agent:
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, issue.body, re.IGNORECASE | re.DOTALL)
+            match = re.search(pattern, body, re.IGNORECASE | re.DOTALL)
             if match:
                 branch_name = match.group(1).strip()
                 # Clean up markdown formatting: **`branch`** -> branch
                 branch_name = re.sub(r'[*`]+', '', branch_name).strip()
                 log.info(f"Found target branch in issue body: {branch_name}")
+                return branch_name
+
+        return None
+
+    def _extract_team_branch_from_issue(self, issue) -> Optional[str]:
+        """
+        Extract the team's base branch from the issue body.
+
+        Teams work on their own long-lived branch; the agent forks its work
+        branch off it and opens the PR against it (instead of dev/main).
+
+        Supported forms:
+        - GitHub issue-form heading: "### Team branch" followed by the value
+        - Inline: "Team branch: team/photon" or "Base branch: team/photon"
+
+        Args:
+            issue: GitHub Issue object
+
+        Returns:
+            Branch name if found, None otherwise
+        """
+        if not issue.body:
+            return None
+
+        patterns = [
+            r'#+\s*(?:team|base)\s+branch\s*\n+\s*[`*]*([A-Za-z0-9/_.\-]+)',
+            r'(?:team|base)\s+branch\s*[:=]\s*[`*]*([A-Za-z0-9/_.\-]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, issue.body, re.IGNORECASE)
+            if match:
+                branch_name = re.sub(r'[*`]+', '', match.group(1)).strip()
+                # GitHub renders empty optional form fields as "_No response_"
+                if not branch_name or branch_name.lower().startswith('_no'):
+                    return None
+                # A leading "-" would be parsed as an option by every git
+                # command this value is handed to — never accept it.
+                if branch_name.startswith('-'):
+                    log.warning(f"Ignoring suspicious team branch value: {branch_name!r}")
+                    return None
+                log.info(f"Found team base branch in issue body: {branch_name}")
                 return branch_name
 
         return None
@@ -172,17 +223,25 @@ class Agent:
             log.warning(f"Error searching for existing PR: {e}")
         return None
 
-    def _get_base_branch(self) -> str:
+    def _get_base_branch(self, issue=None) -> str:
         """
         Get the base branch for the next PR.
 
+        A team branch declared in the issue body wins over everything else.
         If stacked PRs enabled, finds the most recently created open PR
         created by the agent and uses its head branch as the base.
 
         Returns:
+            - If the issue declares a team branch: that branch
             - If stacked PRs enabled and recent agent PR found: that PR's head branch
             - Otherwise: working branch (prefers 'dev' if exists, falls back to default branch)
         """
+        if issue is not None:
+            team_branch = self._extract_team_branch_from_issue(issue)
+            if team_branch:
+                log.info(f"Using team branch from issue as base: {team_branch}")
+                return team_branch
+
         if not self.config.enable_stacked_prs:
             # When stacked PRs disabled, always use the main working branch (dev or main)
             return self.git.get_working_branch()
@@ -312,19 +371,20 @@ class Agent:
         log.info(f"Creating new branch: {branch}")
         return branch
 
-    def _prepare_branch(self, branch: str) -> None:
+    def _prepare_branch(self, branch: str, issue=None) -> None:
         """
         Ensure repository is ready and branch is checked out.
 
         Args:
             branch: Branch name to prepare
+            issue: GitHub Issue object, used to honor a declared team branch
         """
         self.git.ensure_cloned()
 
         if self.git.branch_exists(branch):
             self._checkout_existing_branch(branch)
         else:
-            self._create_new_branch(branch)
+            self._create_new_branch(branch, issue)
 
     def _checkout_existing_branch(self, branch: str) -> None:
         """Checkout existing branch and clean uncommitted changes."""
@@ -350,7 +410,7 @@ class Agent:
         if not branch.startswith(self.config.branch_prefix):
             self.git.run("pull", "--no-rebase", "origin", branch)
 
-    def _create_new_branch(self, branch: str) -> None:
+    def _create_new_branch(self, branch: str, issue=None) -> None:
         """Create new branch from base or fetch from remote."""
         # Check if branch exists on remote
         remote_exists = self.git.run("ls-remote", "--heads", "origin", branch)
@@ -364,7 +424,7 @@ class Agent:
             return
 
         # Create new branch from base
-        base_branch = self._get_base_branch()
+        base_branch = self._get_base_branch(issue)
         log.info(f"Creating new branch: {branch} from {base_branch}")
 
         # Checkout base branch with fallback to default
@@ -499,7 +559,7 @@ class Agent:
             return pr_url
 
         # Create new PR
-        base_branch = self._get_base_branch()
+        base_branch = self._get_base_branch(issue)
         previous_pr_number = None
         default_branch = self.github.default_branch
 
@@ -624,6 +684,11 @@ class Agent:
             log.warning(f"Could not re-add label during claim rollback: {e}")
         self._release_assignee_lock(issue)
 
+    def _branch_exists_on_origin(self, branch: str) -> bool:
+        """True if `branch` exists on the remote (ls-remote heads)."""
+        result = self.git.run("ls-remote", "--heads", "origin", branch)
+        return result.returncode == 0 and bool(result.stdout.strip())
+
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
         Build the implementation prompt for Claude Code.
@@ -669,10 +734,37 @@ class Agent:
         # otherwise the issue sits label-less and assigned forever.
         try:
             self.git.ensure_cloned()
+            team_branch = self._extract_team_branch_from_issue(issue)
+
+            # A declared-but-nonexistent team branch is a permanent config
+            # error, not a transient failure: rolling the claim back would
+            # make the poll loop re-claim (and re-comment) forever. Escalate
+            # to a human once instead.
+            if team_branch and not self._branch_exists_on_origin(team_branch):
+                log.error(
+                    f"Issue #{issue_num} declares team branch '{team_branch}' "
+                    "which does not exist on origin — escalating to human."
+                )
+                try:
+                    issue.create_comment(
+                        f"⚠️ This issue declares team branch `{team_branch}`, "
+                        "but that branch does not exist on the repository. "
+                        "Please create the branch or fix the field, then "
+                        f"re-add the `{self.config.issue_label}` label."
+                    )
+                    issue.add_to_labels("needs-human")
+                except Exception as comment_error:
+                    log.warning(f"Could not escalate issue #{issue_num}: {comment_error}")
+                self._release_assignee_lock(issue)
+                return IssueResult(
+                    success=False, branch=branch,
+                    error=f"team branch '{team_branch}' not found on origin",
+                )
+
             worktree_path = self.worktrees.create(
                 repo_path=self.git.path,
                 branch=branch,
-                base=self.git.get_working_branch(),
+                base=team_branch or self.git.get_working_branch(),
             )
         except Exception as e:
             log.exception(f"Worktree setup failed for issue #{issue_num} — rolling back claim")
@@ -749,7 +841,7 @@ class Agent:
                 log.info(f"Starting new session for issue #{issue_num}")
 
             # Step 2: Prepare branch (checkout or create)
-            self._prepare_branch(branch)
+            self._prepare_branch(branch, issue)
 
             # Step 3: Build prompt and execute Claude Code
             prompt = self._build_prompt(issue, state if state.session_count > 0 else None)
@@ -1026,10 +1118,11 @@ class Agent:
         # Make sure local main checkout has the latest objects so worktree
         # creation can derive from a fresh base.
         self.git.ensure_cloned()
+        team_branch = self._extract_team_branch_from_issue(issue) if issue else None
         worktree_path = self.worktrees.create(
             repo_path=self.git.path,
             branch=branch,
-            base=self.git.get_working_branch(),
+            base=team_branch or self.git.get_working_branch(),
         )
         worktree_git = GitRepo(
             path=worktree_path,
