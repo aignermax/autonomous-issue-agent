@@ -101,37 +101,80 @@ class TestGetBaseBranch:
         assert agent._get_base_branch() == "main"
 
 
-class TestNonexistentTeamBranchEscalates:
-    """Review finding: a typo'd team branch previously hit the transient
-    rollback path — re-claim, re-comment, re-fail, forever. It must escalate
-    to a human exactly once instead."""
+def _git_run_stub(push_rc):
+    """git.run stub: branch missing on origin, push returns `push_rc`."""
+    def run(*args, **kwargs):
+        if args[0] == "ls-remote":
+            return MagicMock(returncode=0, stdout="")  # branch missing
+        if args[0] == "push":
+            return MagicMock(returncode=push_rc, stdout="", stderr="denied")
+        return MagicMock(returncode=0, stdout="ok", stderr="")
+    return run
 
-    def test_escalates_instead_of_rollback_loop(self, tmp_path):
+
+class TestMissingTeamBranch:
+    """A missing team branch is created automatically from the working
+    branch (dev → main fallback); only a failed creation escalates."""
+
+    def _agent_with_mocks(self, push_rc):
         agent = _agent()
         agent.config = MagicMock()
         agent.config.issue_label = "agent-task"
         agent.git = MagicMock()
-        # ls-remote finds nothing → branch missing on origin
-        agent.git.run.return_value = MagicMock(returncode=0, stdout="")
+        agent.git.run.side_effect = _git_run_stub(push_rc)
+        agent.git.get_working_branch.return_value = "main"
+        agent._release_assignee_lock = MagicMock()
+        return agent
+
+    def _issue(self):
+        issue = MagicMock()
+        issue.number = 9
+        issue.body = "### Team branch\n\nteam/fresh"
+        issue.title = "t"
+        issue.labels = []
+        return issue
+
+    def test_missing_branch_is_created_from_working_branch(self):
+        agent = self._agent_with_mocks(push_rc=0)
+        issue = self._issue()
+
+        assert agent._ensure_team_branch_exists(issue, "team/fresh") is True
+        push_calls = [c for c in agent.git.run.call_args_list if c.args[0] == "push"]
+        assert push_calls == [
+            (("push", "origin", "origin/main:refs/heads/team/fresh"),)]
+        issue.create_comment.assert_called_once()  # creation announced
+        issue.add_to_labels.assert_not_called()    # no escalation
+        agent._release_assignee_lock.assert_not_called()
+
+    def test_failed_creation_escalates_once(self):
+        agent = self._agent_with_mocks(push_rc=1)
+        issue = self._issue()
+
+        assert agent._ensure_team_branch_exists(issue, "team/fresh") is False
+        issue.create_comment.assert_called_once()
+        issue.add_to_labels.assert_called_once_with("needs-human")
+        agent._release_assignee_lock.assert_called_once()
+
+    def test_failed_creation_stops_process_issue_without_rollback_loop(self):
+        agent = self._agent_with_mocks(push_rc=1)
         agent.session_manager = MagicMock()
         agent.session_manager.load_state.return_value = None
         agent.worktrees = MagicMock()
         agent._claim_issue_and_create_branch = MagicMock(return_value="agent/issue-9-x")
-        agent._release_assignee_lock = MagicMock()
         agent._rollback_claim = MagicMock()
-
-        issue = MagicMock()
-        issue.number = 9
-        issue.body = "### Team branch\n\nteam/does-not-exist"
-        issue.title = "t"
-        issue.labels = []
+        issue = self._issue()
 
         result = agent.process_issue(issue)
 
         assert result.success is False
-        issue.create_comment.assert_called_once()
-        issue.add_to_labels.assert_called_once_with("needs-human")
-        agent._release_assignee_lock.assert_called_once()
         # crucial: NOT the transient-rollback path (which re-adds agent-task)
         agent._rollback_claim.assert_not_called()
         agent.worktrees.create.assert_not_called()
+
+    def test_existing_branch_short_circuits(self):
+        agent = self._agent_with_mocks(push_rc=1)  # push would fail, but…
+        agent.git.run.side_effect = None
+        agent.git.run.return_value = MagicMock(returncode=0, stdout="ref exists")
+        issue = self._issue()
+        assert agent._ensure_team_branch_exists(issue, "team/fresh") is True
+        issue.create_comment.assert_not_called()  # nothing to announce

@@ -346,7 +346,16 @@ class Agent:
                 log.warning(f"Could not assign issue #{issue_num}: {assign_error}")
                 log.warning("Lock will only be via label removal (less reliable for multi-agent)")
 
-            issue.create_comment(f"🤖 Agent `{hostname}` is now working on this issue...")
+            team_branch = self._extract_team_branch_from_issue(issue)
+            base_note = (
+                f"\n\nWork will branch off **`{team_branch}`** and the PR will "
+                "target it. If that branch doesn't exist yet, it is created "
+                f"automatically. (Wrong branch? Edit the issue's team-branch "
+                f"field and re-add the `{self.config.issue_label}` label.)"
+                if team_branch else ""
+            )
+            issue.create_comment(
+                f"🤖 Agent `{hostname}` is now working on this issue...{base_note}")
             log.info(f"Posted claim comment with hostname: {hostname}")
         except Exception as e:
             log.warning(f"Could not remove label or post comment on issue #{issue_num}: {e}")
@@ -689,6 +698,57 @@ class Agent:
         result = self.git.run("ls-remote", "--heads", "origin", branch)
         return result.returncode == 0 and bool(result.stdout.strip())
 
+    def _ensure_team_branch_exists(self, issue, team_branch: str) -> bool:
+        """Make sure the declared team branch exists on origin, creating it
+        from the working branch (dev if present, else default) when missing.
+
+        Workshop teams shouldn't need to pre-create branches. Creation is
+        announced on the issue so a typo'd name is visible instead of
+        silently spawning a stray branch. Returns False only when creation
+        failed — then the issue has been escalated (comment + needs-human)
+        and the assignee lock released.
+        """
+        if self._branch_exists_on_origin(team_branch):
+            return True
+
+        working = self.git.get_working_branch()
+        log.info(f"Team branch '{team_branch}' missing — creating from '{working}'")
+        self.git.run("fetch", "origin", f"+{working}:refs/remotes/origin/{working}")
+        push = self.git.run(
+            "push", "origin", f"origin/{working}:refs/heads/{team_branch}")
+        if push.returncode == 0:
+            # Make origin/<team_branch> resolvable locally (worktree base).
+            self.git.run("fetch", "origin",
+                         f"+{team_branch}:refs/remotes/origin/{team_branch}")
+            try:
+                issue.create_comment(
+                    f"🌱 Team branch `{team_branch}` did not exist yet — "
+                    f"created it from `{working}`. If the name is a typo, "
+                    "delete the branch and fix the issue field."
+                )
+            except Exception as e:
+                log.warning(f"Could not announce team-branch creation: {e}")
+            return True
+
+        # Creation failed (permissions, protected ref, ...) — this is a
+        # permanent error: escalate once instead of the claim/rollback loop.
+        log.error(
+            f"Could not create team branch '{team_branch}' from '{working}': "
+            f"{push.stderr.strip()[:300]}"
+        )
+        try:
+            issue.create_comment(
+                f"⚠️ This issue declares team branch `{team_branch}`, which "
+                f"does not exist, and creating it from `{working}` failed "
+                f"(`{push.stderr.strip()[:200]}`). Please create the branch "
+                f"manually, then re-add the `{self.config.issue_label}` label."
+            )
+            issue.add_to_labels("needs-human")
+        except Exception as comment_error:
+            log.warning(f"Could not escalate issue #{issue.number}: {comment_error}")
+        self._release_assignee_lock(issue)
+        return False
+
     def _build_prompt(self, issue, state: Optional[SessionState] = None) -> str:
         """
         Build the implementation prompt for Claude Code.
@@ -736,29 +796,14 @@ class Agent:
             self.git.ensure_cloned()
             team_branch = self._extract_team_branch_from_issue(issue)
 
-            # A declared-but-nonexistent team branch is a permanent config
-            # error, not a transient failure: rolling the claim back would
-            # make the poll loop re-claim (and re-comment) forever. Escalate
-            # to a human once instead.
-            if team_branch and not self._branch_exists_on_origin(team_branch):
-                log.error(
-                    f"Issue #{issue_num} declares team branch '{team_branch}' "
-                    "which does not exist on origin — escalating to human."
-                )
-                try:
-                    issue.create_comment(
-                        f"⚠️ This issue declares team branch `{team_branch}`, "
-                        "but that branch does not exist on the repository. "
-                        "Please create the branch or fix the field, then "
-                        f"re-add the `{self.config.issue_label}` label."
-                    )
-                    issue.add_to_labels("needs-human")
-                except Exception as comment_error:
-                    log.warning(f"Could not escalate issue #{issue_num}: {comment_error}")
-                self._release_assignee_lock(issue)
+            # Missing team branches are auto-created from the working branch
+            # (dev → main fallback) so teams never have to pre-create them.
+            # Only a failed creation escalates (handled inside, incl. lock
+            # release) — never the claim/rollback retry loop.
+            if team_branch and not self._ensure_team_branch_exists(issue, team_branch):
                 return IssueResult(
                     success=False, branch=branch,
-                    error=f"team branch '{team_branch}' not found on origin",
+                    error=f"team branch '{team_branch}' could not be created",
                 )
 
             worktree_path = self.worktrees.create(

@@ -391,6 +391,30 @@ The agent will automatically:
 
 ---
 
+### 📝 Issue & PR directives (cheat sheet)
+
+Everything a user can write to steer the agents — in **issue bodies** unless
+noted. All forms are case-insensitive.
+
+| Directive | Where | Effect |
+|-----------|-------|--------|
+| Label `agent-task` | issue | Agent picks the issue up (activation) |
+| Label `complex` | issue | Higher turn/token budget + UX design pass + PR screenshot walkthrough |
+| `Team branch: team/photon`<br>`Base branch: team/photon`<br>issue-form field `### Team branch` | issue | Agent branches **off** this branch and opens the PR **against** it (instead of dev/main). **Created automatically** from the working branch (dev if present, else default) when missing — creation is announced on the issue. |
+| `branch: feature/xyz`<br>`Work on branch: feature/xyz` | issue | Agent works **directly on** this existing branch instead of creating an `agent/issue-…` branch |
+| `@agent <request>` | PR comment | PR-feedback agent implements the request on the PR branch and replies with a report + updated screenshots (repo must enable `pr-feedback` in `.agent.toml`) |
+
+Notes:
+- *Team branch* (base to fork **from**) and *work branch* (branch to work **on**)
+  are different directives and can be combined.
+- Repos opt into roles via `.agent.toml` (`agents_enabled = ["coder",
+  "reviewer", "qa", "pr-feedback"]`) — see the per-repo configuration section.
+- Workshop-style repos can expose the team-branch field via a GitHub issue
+  form (see `photonics-ai-workshop`'s `agent-task.yml`) so users never need
+  to know the inline syntax.
+
+---
+
 ### 🎯 Label-Based Quality Tiers
 
 The agent uses a **two-label system** to balance quality and cost:
