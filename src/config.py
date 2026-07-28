@@ -67,6 +67,19 @@ class Config:
         # Set AGENT_CODER_MODEL (e.g. "claude-fable-5") to override.
         self.coder_model: Optional[str] = os.environ.get("AGENT_CODER_MODEL") or None
 
+        # Eco mode: issues labeled with the eco tag run their CODER sessions
+        # on a cheap Anthropic-compatible endpoint (default: Moonshot/Kimi
+        # K2). Reviewer/QA stay on the default provider as a quality net.
+        # Requires AGENT_ECO_API_KEY — without it the tag is ignored (with a
+        # warning) and the default provider is used.
+        self.eco_tag: str = os.environ.get("AGENT_ECO_TAG", "eco")
+        self.eco_model: str = os.environ.get("AGENT_ECO_MODEL", "kimi-k2-thinking")
+        self.eco_base_url: str = os.environ.get(
+            "AGENT_ECO_BASE_URL", "https://api.moonshot.ai/anthropic")
+        self.eco_api_key: Optional[str] = (
+            os.environ.get("AGENT_ECO_API_KEY")
+            or os.environ.get("MOONSHOT_API_KEY") or None)
+
         # PR-feedback role: reacts to human PR comments containing the marker,
         # implements the requested change, and replies with fresh screenshots.
         # Marker-based by design — agent comments post under the same token

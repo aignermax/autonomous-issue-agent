@@ -180,7 +180,7 @@ class TestRunQAFixHappyPath:
         class _StubClaude:
             calls = []
 
-            def __init__(self, working_dir, max_turns, model=None):
+            def __init__(self, working_dir, max_turns, model=None, env_overrides=None):
                 self.calls.append(working_dir)
 
             def execute(self, prompt, resume_file=None):

@@ -700,6 +700,41 @@ class Agent:
         result = self.git.run("ls-remote", "--heads", "origin", branch)
         return result.returncode == 0 and bool(result.stdout.strip())
 
+    def _issue_is_eco(self, issue) -> bool:
+        """True if the issue carries the eco (economy-mode) label."""
+        if issue is None:
+            return False
+        return self.config.eco_tag.lower() in (
+            label.name.lower() for label in issue.labels)
+
+    def _worker_provider(self, issue) -> tuple:
+        """(model, env_overrides) for a coder worker on this issue.
+
+        Eco-labeled issues run on the cheap Anthropic-compatible endpoint
+        (Moonshot/Kimi by default); reviewer/QA stay on the default provider
+        as a quality net. Without an eco API key the tag is ignored so a
+        missing secret can never silently stall an issue.
+        """
+        if not self._issue_is_eco(issue):
+            return self.config.coder_model, {}
+        if not self.config.eco_api_key:
+            log.warning(
+                f"Issue #{issue.number} has '{self.config.eco_tag}' tag but "
+                "AGENT_ECO_API_KEY is not set — using default provider")
+            return self.config.coder_model, {}
+        log.info(
+            f"Issue #{issue.number} eco mode → {self.config.eco_model} "
+            f"@ {self.config.eco_base_url}")
+        return self.config.eco_model, {
+            "ANTHROPIC_BASE_URL": self.config.eco_base_url,
+            "ANTHROPIC_AUTH_TOKEN": self.config.eco_api_key,
+            "ANTHROPIC_API_KEY": self.config.eco_api_key,
+            # Claude Code's auxiliary calls use a small/fast model whose
+            # Anthropic id doesn't exist on third-party endpoints.
+            "ANTHROPIC_MODEL": self.config.eco_model,
+            "ANTHROPIC_SMALL_FAST_MODEL": self.config.eco_model,
+        }
+
     def _ensure_team_branch_exists(self, issue, team_branch: str) -> bool:
         """Make sure the declared team branch exists on origin, creating it
         from the working branch (dev if present, else default) when missing.
@@ -826,7 +861,9 @@ class Agent:
             remote_url=self.git.remote_url,
             default_branch=self.git.default_branch,
         )
-        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns, model=self.config.coder_model)
+        worker_model, worker_env = self._worker_provider(issue)
+        worktree_claude = ClaudeCode(working_dir=worktree_path, max_turns=max_turns,
+                                     model=worker_model, env_overrides=worker_env)
 
         original_git, original_claude = self.git, self.claude
         self.git, self.claude = worktree_git, worktree_claude
@@ -1055,7 +1092,9 @@ class Agent:
                 tools_dir=tools_dir, tools_python=tools_python,
             )
             max_turns, _, _ = self._detect_issue_complexity(issue)
-            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns, model=self.config.coder_model)
+            worker_model, worker_env = self._worker_provider(issue)
+            worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns,
+                                model=worker_model, env_overrides=worker_env)
             log.info(f"Re-running worker for round {round_num + 1}")
             _output, reached_max, _usage = worker.execute(retry_prompt)
             if reached_max:
@@ -1202,7 +1241,9 @@ class Agent:
         else:
             max_turns = self.config.max_turns_regular
 
-        worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns, model=self.config.coder_model)
+        worker_model, worker_env = self._worker_provider(issue)
+        worker = ClaudeCode(working_dir=worktree_path, max_turns=max_turns,
+                            model=worker_model, env_overrides=worker_env)
         log.info(f"Running QA-fix worker for PR #{pr.number} (round {failures + 1}/{max_rounds})")
         try:
             output, reached_max, usage = worker.execute(prompt)

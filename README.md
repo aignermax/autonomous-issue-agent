@@ -400,6 +400,7 @@ noted. All forms are case-insensitive.
 |-----------|-------|--------|
 | Label `agent-task` | issue | Agent picks the issue up (activation) |
 | Label `complex` | issue | Higher turn/token budget + UX design pass + PR screenshot walkthrough |
+| Label `eco` | issue | Economy mode: coder sessions run on the cheap eco model (default Kimi K2 via Moonshot's Anthropic-compatible endpoint); reviewer/QA stay on the default provider. Requires `AGENT_ECO_API_KEY`. |
 | `Team branch: team/photon`<br>`Base branch: team/photon`<br>issue-form field `### Team branch` | issue | Agent branches **off** this branch and opens the PR **against** it (instead of dev/main). **Created automatically** from the working branch (dev if present, else default) when missing — creation is announced on the issue. |
 | `branch: feature/xyz`<br>`Work on branch: feature/xyz` | issue | Agent works **directly on** this existing branch instead of creating an `agent/issue-…` branch |
 | `@agent <request>` | PR comment | PR-feedback agent implements the request on the PR branch and replies with a report + updated screenshots (repo must enable `pr-feedback` in `.agent.toml`) |

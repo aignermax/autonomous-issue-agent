@@ -108,7 +108,7 @@ class ClaudeCode:
     _BUNDLED_SETTINGS = object()
 
     def __init__(self, working_dir: Path, max_turns: int = 300, model: Optional[str] = None,
-                 settings_file=_BUNDLED_SETTINGS):
+                 settings_file=_BUNDLED_SETTINGS, env_overrides: Optional[dict] = None):
         """
         Initialize Claude Code runner.
 
@@ -121,10 +121,15 @@ class ClaudeCode:
                 malformed file raises, because the CLI silently ignores broken
                 settings and the agent would run unenforced. Pass None to run
                 without settings deliberately.
+            env_overrides: Extra environment for the CLI subprocess. Used to
+                point Claude Code at an Anthropic-compatible third-party
+                endpoint (e.g. Moonshot/Kimi via ANTHROPIC_BASE_URL +
+                ANTHROPIC_AUTH_TOKEN) for eco-mode issues.
         """
         self.working_dir = working_dir
         self.max_turns = max_turns
         self.model = model
+        self.env_overrides = dict(env_overrides) if env_overrides else {}
         if settings_file is ClaudeCode._BUNDLED_SETTINGS:
             settings_file = default_settings_path()
         self.settings_file: Optional[Path] = settings_file
@@ -234,6 +239,7 @@ class ClaudeCode:
         import os
         env = os.environ.copy()
         env['BROWSER'] = 'echo'  # Prevent Claude Code from opening browser windows (use echo instead of /bin/true to avoid errors)
+        env.update(self.env_overrides)
 
         process = subprocess.Popen(
             cmd,
@@ -476,6 +482,7 @@ class ClaudeCode:
             import os
             env = os.environ.copy()
             env['BROWSER'] = 'echo'  # Prevent Claude Code from opening browser windows (use echo instead of /bin/true to avoid errors)
+            env.update(self.env_overrides)
 
             process = subprocess.Popen(
                 cmd,
