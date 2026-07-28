@@ -137,7 +137,7 @@ class Agent:
         # "Team branch: team/x" / "base branch = team/x" match the generic
         # "branch:"/"branch=" patterns below and the agent would commit
         # directly to the team branch.
-        body = re.sub(r'(?:team|base)\s+branch\s*[:=][^\n]*', '',
+        body = re.sub(r'\b(?:team|base)\s+branch\s*[:=][^\n]*', '',
                       issue.body, flags=re.IGNORECASE)
 
         # Pattern: matches "branch: something" or "branch:something"
@@ -180,9 +180,11 @@ class Agent:
         if not issue.body:
             return None
 
+        # \b keeps look-alikes ("rebase branch:", "codebase branch:") from
+        # being read as directives.
         patterns = [
-            r'#+\s*(?:team|base)\s+branch\s*\n+\s*[`*]*([A-Za-z0-9/_.\-]+)',
-            r'(?:team|base)\s+branch\s*[:=]\s*[`*]*([A-Za-z0-9/_.\-]+)',
+            r'#+\s*\b(?:team|base)\s+branch\s*\n+\s*[`*]*([A-Za-z0-9/_.\-]+)',
+            r'\b(?:team|base)\s+branch\s*[:=]\s*[`*]*([A-Za-z0-9/_.\-]+)',
         ]
 
         for pattern in patterns:

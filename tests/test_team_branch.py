@@ -77,6 +77,18 @@ class TestExtractTeamBranch:
         """Review finding: a value like '-x' would be parsed as a git option."""
         assert _agent()._extract_team_branch_from_issue(_issue("Team branch: -evil")) is None
 
+    def test_lookalike_words_are_not_directives(self):
+        """'rebase branch:' / 'codebase branch:' must not read as team-branch
+        directives — and must stay visible to the work-branch extractor."""
+        agent = _agent()
+        assert agent._extract_team_branch_from_issue(
+            _issue("Please rebase branch: feature/x onto main")) is None
+        assert agent._extract_team_branch_from_issue(
+            _issue("The codebase branch: naming is odd")) is None
+        # the work-branch extractor still sees the genuine "branch:" inside
+        assert agent._extract_branch_from_issue(
+            _issue("Please rebase branch: feature/x onto main")) == "feature/x"
+
 
 class TestGetBaseBranch:
     def test_team_branch_wins(self):
