@@ -55,3 +55,37 @@ class TestReviewerCommentHygiene:
         from src.prompt_template import REVIEWER_TEMPLATE
         assert "Comment hygiene" in REVIEWER_TEMPLATE
         assert "WHAT-comments" in REVIEWER_TEMPLATE
+
+
+class TestQAReviewVisualInspection:
+    """Ported from PR #6, adapted: walkthrough PNGs live in docs/pr-media
+    (pr_media removes the transient artifacts/ copies before commit)."""
+
+    def _pr(self):
+        pr = MagicMock()
+        pr.number = 7
+        pr.title = "Add feature X"
+        return pr
+
+    def test_visual_inspection_instructions_present(self):
+        from src.prompt_template import build_qa_review_prompt
+        prompt = build_qa_review_prompt(self._pr(), branch="feat/x", base_branch="main")
+        assert "docs/pr-media" in prompt
+        assert "NO_SCREENSHOTS" in prompt
+        assert "Read each PNG" in prompt
+        assert "[UI]" in prompt
+
+    def test_custom_screenshots_dir_is_honored(self):
+        from src.prompt_template import build_qa_review_prompt
+        prompt = build_qa_review_prompt(
+            self._pr(), branch="feat/x", base_branch="main",
+            screenshots_dir="custom/shots")
+        assert "custom/shots" in prompt
+        assert "docs/pr-media" not in prompt
+
+    def test_no_unresolved_placeholders(self):
+        import re
+        from src.prompt_template import build_qa_review_prompt
+        prompt = build_qa_review_prompt(self._pr(), branch="feat/x", base_branch="main")
+        unresolved = re.findall(r"(?<!\{)\{[a-zA-Z_][a-zA-Z0-9_]*\}(?!\})", prompt)
+        assert unresolved == [], f"Unresolved placeholders: {unresolved}"

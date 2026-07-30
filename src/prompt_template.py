@@ -376,6 +376,22 @@ have already passed mechanically. Verify the PR diff is actually shippable.
    - Security: input validation gaps, secret logging, path traversal,
      command injection
    - Scope creep: changes unrelated to the PR's stated purpose
+5. Visual UI/UX inspection (walkthrough screenshots live on the branch):
+   ```bash
+   ls {screenshots_dir}/*/*.png 2>/dev/null || echo NO_SCREENSHOTS
+   ```
+   - If the output is `NO_SCREENSHOTS`, skip this step silently — do NOT
+     penalise the PR for missing screenshots.
+   - If PNG files are listed, **Read each PNG** and evaluate it against the
+     PR's stated purpose:
+     - Empty or blank panels where content is expected
+     - Clipped, overlapping, or misaligned controls
+     - Broken layout (e.g. controls outside their container)
+     - Missing or invisible labels / buttons that the PR claims to add
+     - Feature visibly absent from the UI
+   - A broken or non-functional UI element → **BLOCKING** finding.
+   - A cosmetic issue (colour, spacing, alignment) → **NIT** finding.
+   - Prefix the finding text with `[UI]` to distinguish it from code findings.
 
 ## Output Format — STRICT
 
@@ -401,12 +417,17 @@ DO NOT modify any files. DO NOT commit. Read-only review."""
 
 def build_qa_review_prompt(pr, branch: str, base_branch: str,
                            tools_dir: str = "tools",
-                           tools_python: str = "python3") -> str:
+                           tools_python: str = "python3",
+                           screenshots_dir: str = "docs/pr-media") -> str:
     """Build the QA-reviewer prompt for a given PR.
 
     Unlike the implementation Reviewer, this one is PR-centric and does not
     require an Issue object — QA may run against PRs whose linking issue is
     stale or absent.
+
+    screenshots_dir: where the visual walkthrough PNGs live on the branch.
+    Default is docs/pr-media (pr_media publishes per-issue subfolders there;
+    the transient artifacts/ copies are removed before commit).
     """
     return QA_REVIEW_TEMPLATE.format(
         pr_number=pr.number,
@@ -415,6 +436,7 @@ def build_qa_review_prompt(pr, branch: str, base_branch: str,
         base_branch=base_branch,
         tools_dir=tools_dir,
         tools_python=tools_python,
+        screenshots_dir=screenshots_dir,
     )
 
 
