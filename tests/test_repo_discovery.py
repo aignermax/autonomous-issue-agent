@@ -96,11 +96,20 @@ class TestDiscoveryThrottle:
         import src.agent as agent_mod
         monkeypatch.setattr(agent_mod, "search_repos_with_label",
                             lambda gh, org, label: calls.append(1) or set())
+        monkeypatch.setattr(agent_mod, "search_repos_with_agent_prs",
+                            lambda gh, org: set())
+        monkeypatch.setattr(agent_mod, "search_repos_with_qa_failed",
+                            lambda gh, org: set())
+        monkeypatch.setattr(agent_mod, "search_manual_repos_with_label",
+                            lambda gh, repos, label: set())
         monkeypatch.setenv("GITHUB_TOKEN", "t")
 
         agent._maybe_discover_repos()
         agent._maybe_discover_repos()  # within interval → no second search
         assert len(calls) == 1
+        # hints were written by the sweep
+        from src.repo_discovery import HINTS_FILENAME
+        assert (tmp_path / HINTS_FILENAME).exists()
 
     def test_discovery_errors_are_swallowed(self, tmp_path, monkeypatch):
         from tests.test_team_branch import _agent
@@ -117,3 +126,61 @@ class TestDiscoveryThrottle:
         monkeypatch.setattr(agent_mod, "search_repos_with_label", boom)
         monkeypatch.setenv("GITHUB_TOKEN", "t")
         agent._maybe_discover_repos()  # must not raise
+
+
+class TestWorkHints:
+    def test_roundtrip_and_staleness(self, tmp_path):
+        from src.repo_discovery import save_work_hints, load_work_hints
+        save_work_hints(tmp_path, {"o/a"}, {"o/b"})
+        assert load_work_hints(tmp_path, max_age_sec=999) == {"o/a", "o/b"}
+        # stale hints are ignored (degrade to plain rotation)
+        assert load_work_hints(tmp_path, max_age_sec=0) == set()
+
+    def test_missing_file_is_empty(self, tmp_path):
+        from src.repo_discovery import load_work_hints
+        assert load_work_hints(tmp_path, max_age_sec=999) == set()
+
+
+class TestSearchVariants:
+    def _gh(self, names):
+        from types import SimpleNamespace
+        gh = MagicMock()
+        gh.search_issues.return_value = [
+            SimpleNamespace(repository=SimpleNamespace(full_name=n)) for n in names]
+        return gh
+
+    def test_agent_pr_query(self):
+        from src.repo_discovery import search_repos_with_agent_prs
+        gh = self._gh(["o/x"])
+        assert search_repos_with_agent_prs(gh, "Akhetonics") == {"o/x"}
+        q = gh.search_issues.call_args[0][0]
+        assert "is:pr" in q and "is:open" in q and "Agent:" in q
+
+    def test_qa_failed_query(self):
+        from src.repo_discovery import search_repos_with_qa_failed
+        gh = self._gh([])
+        search_repos_with_qa_failed(gh, "Akhetonics")
+        assert "label:qa-failed" in gh.search_issues.call_args[0][0]
+
+    def test_manual_repo_query_and_empty_shortcut(self):
+        from src.repo_discovery import search_manual_repos_with_label
+        gh = self._gh(["a/l"])
+        assert search_manual_repos_with_label(gh, ["a/l", "b/m"], "agent-task") == {"a/l"}
+        q = gh.search_issues.call_args[0][0]
+        assert "repo:a/l" in q and "repo:b/m" in q
+        gh2 = MagicMock()
+        assert search_manual_repos_with_label(gh2, [], "agent-task") == set()
+        gh2.search_issues.assert_not_called()
+
+
+class TestOrgReadAccessNote:
+    def test_note_present_when_org_set(self):
+        from types import SimpleNamespace
+        from src.prompt_template import build_prompt
+        issue = SimpleNamespace(number=1, title="t", body="b")
+        p = build_prompt(issue, org_read_access="Akhetonics")
+        assert "Cross-repo reference access" in p
+        assert "git clone --depth 1" in p
+        assert "github.com/Akhetonics/" in p
+        assert "${GITHUB_TOKEN}" in p
+        assert "Cross-repo" not in build_prompt(issue)

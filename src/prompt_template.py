@@ -159,7 +159,8 @@ These tools save 500-5000 tokens per use! Use them frequently!
 
 
 def build_prompt(issue, state=None, repo_name=None, tools_dir: str = "tools",
-                 tools_python: str = "python3", complexity: str = "REGULAR") -> str:
+                 tools_python: str = "python3", complexity: str = "REGULAR",
+                 org_read_access: str = "") -> str:
     """
     Build the implementation prompt for Claude Code.
 
@@ -216,6 +217,25 @@ repo:**
 4. **DO NOT waste tokens guessing** — the source code is available locally!
 """.format(tools_dir=tools_dir, tools_python=tools_python)
 
+    # Cross-repo reference access: org repos often depend on sibling repos
+    # (ISA definitions, compilers, SDKs). Let the worker consult the source
+    # instead of guessing.
+    org_note = ""
+    if org_read_access:
+        org_note = f"""
+
+## 🔎 Cross-repo reference access (read-only)
+You have READ access to every repository in the `{org_read_access}` GitHub
+org. When this task depends on a sibling repo — an ISA definition (e.g.
+raycore-isa is the source of truth for assembly), a compiler, a shared SDK —
+consult the actual source instead of guessing:
+```bash
+git clone --depth 1 https://x-access-token:${{GITHUB_TOKEN}}@github.com/{org_read_access}/<repo>.git /tmp/ref-<repo>
+```
+Rules: reference clones are read-only — never commit or push to them, and
+never copy secrets or wholesale code from them into this repo.
+"""
+
     # UX design pass — only for COMPLEX issues. Pushes the coder past bare
     # core logic into designing the interaction a real user actually needs.
     ux_note = ""
@@ -243,7 +263,7 @@ Don't stop at the core business logic — design the *interaction* a real user n
             recent_notes=recent_notes,
             tools_dir=tools_dir,
             tools_python=tools_python,
-        ) + workspace_note + ux_note + PR_SUMMARY_INSTRUCTION
+        ) + workspace_note + org_note + ux_note + PR_SUMMARY_INSTRUCTION
     return INITIAL_TEMPLATE.format(
         issue_number=issue.number,
         issue_title=issue.title,
@@ -251,7 +271,7 @@ Don't stop at the core business logic — design the *interaction* a real user n
         issue_body=issue.body or "No description provided.",
         tools_dir=tools_dir,
         tools_python=tools_python,
-    ) + workspace_note + ux_note + PR_SUMMARY_INSTRUCTION
+    ) + workspace_note + org_note + ux_note + PR_SUMMARY_INSTRUCTION
 
 
 REVIEWER_TEMPLATE = """You are a senior code reviewer. Review PR #{pr_number} for issue #{issue_number}.

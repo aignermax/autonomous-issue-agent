@@ -15,7 +15,16 @@ from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
 from .github_client import GitHubClient
-from .repo_discovery import RepoRegistry, effective_repo_names, search_repos_with_label
+from .repo_discovery import (
+    RepoRegistry,
+    effective_repo_names,
+    load_work_hints,
+    save_work_hints,
+    search_manual_repos_with_label,
+    search_repos_with_agent_prs,
+    search_repos_with_label,
+    search_repos_with_qa_failed,
+)
 from .reviewer import Reviewer, ReviewResult
 from .session_state import SessionManager, SessionState
 from .test_gate import TestGate
@@ -811,6 +820,7 @@ class Agent:
             tools_dir=tools_dir,
             tools_python=tools_python,
             complexity=complexity,
+            org_read_access=self.config.discovery_org,
         )
 
     def process_issue(self, issue) -> IssueResult:
@@ -1363,11 +1373,19 @@ class Agent:
         return effective_repo_names(self.config)
 
     def _maybe_discover_repos(self) -> None:
-        """Org-wide agent-task search, at most once per discovery interval.
+        """Org-wide work sweep, at most once per discovery interval.
 
-        ONE search-API request covers the whole org — no per-repo scanning,
-        so a ~200-repo org costs the same as a 3-repo one. Best-effort: any
-        API error is logged and retried next interval.
+        Four search-API requests cover the whole org plus the manual repos —
+        no per-repo scanning, so a ~200-repo org costs the same as a 3-repo
+        one:
+          1. org issues with the activation label   → registry + work hints
+          2. org PRs with title "Agent:" (open)     → registry liveness only
+          3. org PRs labeled qa-failed              → work hints (fix queue)
+          4. manual repos' labeled issues           → work hints
+
+        The hints let run_once jump straight to repos with work instead of
+        blind round-robin. Best-effort: any API error is logged and retried
+        next interval; stale hints degrade to plain rotation.
         """
         if not self.config.discovery_org:
             return
@@ -1377,20 +1395,35 @@ class Agent:
         try:
             from github import Github, Auth
             gh = Github(auth=Auth.Token(os.environ["GITHUB_TOKEN"]))
-            found = search_repos_with_label(
-                gh, self.config.discovery_org, self.config.issue_label)
-            # Manual repos are managed via AGENT_REPOS, not the registry.
+            org = self.config.discovery_org
+            issue_repos = search_repos_with_label(gh, org, self.config.issue_label)
+            pr_repos = search_repos_with_agent_prs(gh, org)
+            qa_failed_repos = search_repos_with_qa_failed(gh, org)
+            manual_issue_repos = search_manual_repos_with_label(
+                gh, self.config.repo_names, self.config.issue_label)
+
+            # Registry (org repos only): labeled issues AND open agent PRs
+            # count as usage, so PR follow-ups keep a repo alive past the
+            # last closed issue. Manual repos never live in the registry.
             manual = {r.lower() for r in self.config.repo_names}
-            found = {r for r in found if r.lower() not in manual}
+            usage = {r for r in (issue_repos | pr_repos | qa_failed_repos)
+                     if r.lower() not in manual}
             registry = RepoRegistry(self.config.session_dir)
-            added = registry.update(found)
+            added = registry.update(usage)
             for repo in added:
-                log.info(f"[discovery] new repo with {self.config.issue_label} issues: {repo}")
+                log.info(f"[discovery] new repo using the agent: {repo}")
+
+            save_work_hints(
+                self.config.session_dir,
+                issue_repos=issue_repos | manual_issue_repos,
+                qa_failed_repos=qa_failed_repos,
+            )
             log.info(
-                f"[discovery] org sweep done: {len(found)} auto repo(s) active, "
-                f"{len(added)} new")
+                f"[discovery] sweep done: {len(usage)} auto repo(s) active "
+                f"({len(added)} new), work in "
+                f"{len(issue_repos | manual_issue_repos | qa_failed_repos)} repo(s)")
         except Exception as e:
-            log.warning(f"[discovery] org sweep failed (retrying next interval): {e}")
+            log.warning(f"[discovery] sweep failed (retrying next interval): {e}")
 
     def run_once(self) -> None:
         """
@@ -1418,9 +1451,18 @@ class Agent:
             log.warning("No repositories configured — nothing to do")
             return
 
-        # Round-robin: check ONLY the next repo in rotation
-        self._last_repo_index = (self._last_repo_index + 1) % num_repos
-        repo_name = repos[self._last_repo_index]
+        # Prefer repos the sweep knows have work (open labeled issues or
+        # qa-failed PRs) — detection latency becomes the sweep interval
+        # instead of a full rotation. Stale/missing hints → plain rotation.
+        hinted = load_work_hints(
+            self.config.session_dir,
+            max_age_sec=self.config.discovery_interval_sec * 3)
+        work_repos = [r for r in repos if r in hinted]
+        pool = work_repos or repos
+
+        # Round-robin within the chosen pool: check ONLY the next repo
+        self._last_repo_index = (self._last_repo_index + 1) % len(pool)
+        repo_name = pool[self._last_repo_index]
 
         log.info(f"Checking repository: {repo_name}")
         try:
