@@ -398,7 +398,7 @@ noted. All forms are case-insensitive.
 
 | Directive | Where | Effect |
 |-----------|-------|--------|
-| Label `agent-task` | issue | Agent picks the issue up (activation) |
+| Label `agent-task` | issue | Agent picks the issue up (activation). In org repos this label also **auto-registers the repo**: one org-wide search per 30 min adds any `AGENT_DISCOVERY_ORG` repo with open `agent-task` issues to the monitored list; 8 days without label activity removes it again. Non-org repos are added manually via `AGENT_REPOS`. |
 | Label `complex` | issue | Higher turn/token budget + UX design pass + PR screenshot walkthrough |
 | Label `eco` | issue | Economy mode: coder sessions run on the cheap eco model (default Kimi K2 via Moonshot's Anthropic-compatible endpoint); reviewer/QA stay on the default provider. Requires `AGENT_ECO_API_KEY`. |
 | `Team branch: team/photon`<br>`Base branch: team/photon`<br>issue-form field `### Team branch` | issue | Agent branches **off** this branch and opens the PR **against** it (instead of dev/main). **Created automatically** from the working branch (dev if present, else default) when missing — creation is announced on the issue. |

@@ -15,6 +15,7 @@ from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
 from .github_client import GitHubClient
+from .repo_discovery import RepoRegistry, effective_repo_names, search_repos_with_label
 from .reviewer import Reviewer, ReviewResult
 from .session_state import SessionManager, SessionState
 from .test_gate import TestGate
@@ -63,6 +64,8 @@ class Agent:
             log.warning(f"Tools bootstrap failed: {e}. Prompts will reference relative 'tools/'.")
         # Round-robin state: track which repo was checked last
         self._last_repo_index = -1
+        # Org-wide repo discovery: timestamp of the last search run
+        self._last_discovery = 0.0
 
     def _count_tool_usage(self, output: str) -> dict:
         """
@@ -1355,6 +1358,40 @@ class Agent:
                 f"(rc={result.returncode}): {result.stderr.strip()[:200]}"
             )
 
+    def _effective_repos(self) -> list:
+        """Manual AGENT_REPOS plus active auto-discovered org repos."""
+        return effective_repo_names(self.config)
+
+    def _maybe_discover_repos(self) -> None:
+        """Org-wide agent-task search, at most once per discovery interval.
+
+        ONE search-API request covers the whole org — no per-repo scanning,
+        so a ~200-repo org costs the same as a 3-repo one. Best-effort: any
+        API error is logged and retried next interval.
+        """
+        if not self.config.discovery_org:
+            return
+        if time.time() - self._last_discovery < self.config.discovery_interval_sec:
+            return
+        self._last_discovery = time.time()
+        try:
+            from github import Github, Auth
+            gh = Github(auth=Auth.Token(os.environ["GITHUB_TOKEN"]))
+            found = search_repos_with_label(
+                gh, self.config.discovery_org, self.config.issue_label)
+            # Manual repos are managed via AGENT_REPOS, not the registry.
+            manual = {r.lower() for r in self.config.repo_names}
+            found = {r for r in found if r.lower() not in manual}
+            registry = RepoRegistry(self.config.session_dir)
+            added = registry.update(found)
+            for repo in added:
+                log.info(f"[discovery] new repo with {self.config.issue_label} issues: {repo}")
+            log.info(
+                f"[discovery] org sweep done: {len(found)} auto repo(s) active, "
+                f"{len(added)} new")
+        except Exception as e:
+            log.warning(f"[discovery] org sweep failed (retrying next interval): {e}")
+
     def run_once(self) -> None:
         """
         Check ONE repository for issues and process if found (with auto-continuation).
@@ -1373,14 +1410,30 @@ class Agent:
 
         This reduces API calls from N repos/cycle to 1 repo/cycle.
         """
-        num_repos = len(self.config.repo_names)
+        self._maybe_discover_repos()
+
+        repos = self._effective_repos()
+        num_repos = len(repos)
+        if num_repos == 0:
+            log.warning("No repositories configured — nothing to do")
+            return
 
         # Round-robin: check ONLY the next repo in rotation
         self._last_repo_index = (self._last_repo_index + 1) % num_repos
-        repo_name = self.config.repo_names[self._last_repo_index]
+        repo_name = repos[self._last_repo_index]
 
         log.info(f"Checking repository: {repo_name}")
-        self._setup_for_repo(repo_name)
+        try:
+            self._setup_for_repo(repo_name)
+        except Exception as e:
+            # Auto-discovered repos can vanish (deleted/renamed/perms). Drop
+            # them from the registry instead of failing every cycle for the
+            # rest of the expiry window; manual repos re-raise as before.
+            if repo_name not in self.config.repo_names:
+                log.warning(f"[discovery] setup failed for {repo_name} — removing from registry: {e}")
+                RepoRegistry(self.config.session_dir).remove(repo_name)
+                return
+            raise
 
         # Phase 2: prioritize fixing QA-failed PRs over starting new work.
         # If we processed one this cycle, defer the new-issue scan to the

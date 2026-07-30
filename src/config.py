@@ -80,6 +80,16 @@ class Config:
             os.environ.get("AGENT_ECO_API_KEY")
             or os.environ.get("MOONSHOT_API_KEY") or None)
 
+        # Repo auto-discovery: every interval the coder runs ONE org-wide
+        # issue search (label:agent-task is:open) and adds hit repos to the
+        # effective repo list; repos expire after N days without label
+        # activity. Empty org disables. Non-org repos stay manual.
+        self.discovery_org: str = os.environ.get("AGENT_DISCOVERY_ORG", "Akhetonics")
+        self.discovery_interval_sec: int = int(
+            os.environ.get("AGENT_DISCOVERY_INTERVAL_SEC", "1800"))
+        self.discovery_expiry_days: int = int(
+            os.environ.get("AGENT_DISCOVERY_EXPIRY_DAYS", "8"))
+
         # PR-feedback role: reacts to human PR comments containing the marker,
         # implements the requested change, and replies with fresh screenshots.
         # Marker-based by design — agent comments post under the same token

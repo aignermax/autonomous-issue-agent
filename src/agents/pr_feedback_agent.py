@@ -191,14 +191,24 @@ class PRFeedbackAgent:
     # -- polling --------------------------------------------------------
 
     def run_once(self) -> None:
-        num_repos = len(self.config.repo_names)
+        from ..repo_discovery import effective_repo_names
+        repos = effective_repo_names(self.config)
+        num_repos = len(repos)
         if num_repos == 0:
             log.warning("[pr-feedback] no repositories configured")
             return
         self._last_repo_index = (self._last_repo_index + 1) % num_repos
-        repo_name = self.config.repo_names[self._last_repo_index]
+        repo_name = repos[self._last_repo_index]
         log.info(f"[pr-feedback] checking repository: {repo_name}")
-        self._setup_for_repo(repo_name)
+        try:
+            self._setup_for_repo(repo_name)
+        except Exception as e:
+            # Auto-discovered repos can vanish; the coder prunes the
+            # registry — here we just skip the cycle instead of erroring.
+            if repo_name not in self.config.repo_names:
+                log.warning(f"[pr-feedback] setup failed for discovered repo {repo_name}: {e}")
+                return
+            raise
 
         assert self.github is not None
         marker = self.config.pr_feedback_marker

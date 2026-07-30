@@ -957,6 +957,32 @@ class Dashboard:
         table.add_row("Complexity Tag:", complexity_tag)
         table.add_row("Poll Interval:", f"{os.environ.get('AGENT_POLL_INTERVAL', '15')}s")
 
+        # Auto-discovered org repos (registry written by the coder's
+        # org-wide agent-task sweep; expire after N idle days).
+        try:
+            try:
+                from repo_discovery import RepoRegistry
+            except ImportError:
+                from .repo_discovery import RepoRegistry
+            expiry_days = int(os.environ.get("AGENT_DISCOVERY_EXPIRY_DAYS", "8"))
+            registry = RepoRegistry(self.monitor.sessions_dir)
+            auto_repos = registry.active_repos(expiry_days)
+            if auto_repos:
+                table.add_row("", "")
+                table.add_row("Auto-discovered:", f"{len(auto_repos)} repo(s)")
+                for repo in auto_repos:
+                    entry = registry._data.get(repo, {})
+                    days_left = ""
+                    try:
+                        last_seen = datetime.strptime(entry["last_seen"], "%Y-%m-%d %H:%M:%S")
+                        remaining = expiry_days - (datetime.now() - last_seen).days
+                        days_left = f" [dim](expires in {max(0, remaining)}d)[/dim]"
+                    except (KeyError, ValueError):
+                        pass
+                    table.add_row("", f"[green]{repo}[/green]{days_left}")
+        except Exception:
+            pass
+
         return Panel(table, title="Configuration", border_style="cyan")
 
     def _get_working_branch(self, repo_name: str) -> Optional[str]:

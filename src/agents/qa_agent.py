@@ -385,16 +385,26 @@ class QAAgent:
 
     def run_once(self) -> None:
         """Round-robin one repository per cycle, mirroring the coder."""
-        num_repos = len(self.config.repo_names)
+        from ..repo_discovery import effective_repo_names
+        repos = effective_repo_names(self.config)
+        num_repos = len(repos)
         if num_repos == 0:
             log.warning("[qa] no repositories configured — nothing to do")
             return
 
         self._last_repo_index = (self._last_repo_index + 1) % num_repos
-        repo_name = self.config.repo_names[self._last_repo_index]
+        repo_name = repos[self._last_repo_index]
 
         log.info(f"[qa] checking repository: {repo_name}")
-        self._setup_for_repo(repo_name)
+        try:
+            self._setup_for_repo(repo_name)
+        except Exception as e:
+            # Auto-discovered repos can vanish; the coder prunes the
+            # registry — here we just skip the cycle instead of erroring.
+            if repo_name not in self.config.repo_names:
+                log.warning(f"[qa] setup failed for discovered repo {repo_name}: {e}")
+                return
+            raise
         self._sweep_stale_running_labels()
 
         pr = self._find_next_pr()
