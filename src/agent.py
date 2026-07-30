@@ -1412,6 +1412,9 @@ class Agent:
             added = registry.update(usage)
             for repo in added:
                 log.info(f"[discovery] new repo using the agent: {repo}")
+            # Coder is the single writer — prune expired entries here (never
+            # from the dashboard, which only reads).
+            registry.prune_expired(self.config.discovery_expiry_days)
 
             save_work_hints(
                 self.config.session_dir,

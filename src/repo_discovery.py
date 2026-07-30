@@ -23,7 +23,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Set
+from typing import List, Optional, Set
 
 log = logging.getLogger("agent")
 
@@ -63,11 +63,8 @@ class RepoRegistry:
             del self._data[repo]
             self._save()
 
-    def active_repos(self, expiry_days: int, now: datetime = None) -> List[str]:
-        """Repos whose label activity is within the expiry window.
-
-        Expired entries are pruned from the store as a side effect.
-        """
+    def _classify(self, expiry_days: int, now: datetime = None):
+        """(active, expired) repo lists — pure, no persistence."""
         now = now or datetime.now()
         cutoff = now - timedelta(days=expiry_days)
         active, expired = [], []
@@ -78,12 +75,32 @@ class RepoRegistry:
                 expired.append(repo)
                 continue
             (active if last_seen >= cutoff else expired).append(repo)
+        return sorted(active), expired
+
+    def active_repos(self, expiry_days: int, now: datetime = None) -> List[str]:
+        """Repos within the expiry window. READ-ONLY — safe for every process.
+
+        Does NOT prune: the registry has a single writer (the coder). A
+        read from the dashboard must never persist, or two processes race
+        on the file and corrupt it. Expiry pruning happens in
+        prune_expired(), called only by the coder.
+        """
+        return self._classify(expiry_days, now)[0]
+
+    def prune_expired(self, expiry_days: int, now: datetime = None) -> List[str]:
+        """Delete expired entries and persist. Coder-only (single writer)."""
+        active, expired = self._classify(expiry_days, now)
         if expired:
             for repo in expired:
                 log.info(f"[discovery] expiring {repo} (no agent-task activity within window)")
                 del self._data[repo]
             self._save()
-        return sorted(active)
+        return active
+
+    def last_seen(self, repo: str) -> Optional[str]:
+        """Public accessor for a repo's last-seen timestamp (or None)."""
+        entry = self._data.get(repo)
+        return entry.get("last_seen") if entry else None
 
     def _save(self) -> None:
         try:

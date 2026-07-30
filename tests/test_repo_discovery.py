@@ -21,14 +21,33 @@ class TestRepoRegistry:
         assert set(RepoRegistry(tmp_path).active_repos(8)) == {
             "Akhetonics/a", "Akhetonics/b"}
 
-    def test_expiry_prunes_stale_repos(self, tmp_path):
+    def test_active_repos_is_readonly(self, tmp_path):
+        """active_repos filters but must NOT persist — single-writer invariant.
+
+        The dashboard reads this from a separate process; a write here would
+        race the coder's registry writes and corrupt the file."""
         reg = RepoRegistry(tmp_path)
         old = datetime.now() - timedelta(days=9)
         reg.update({"Akhetonics/stale"}, now=old)
         reg.update({"Akhetonics/fresh"})
         assert reg.active_repos(8) == ["Akhetonics/fresh"]
-        # pruned from the store, not just filtered
-        assert "Akhetonics/stale" not in reg._data
+        # stale entry filtered from the view but still in the store on disk
+        assert "Akhetonics/stale" in RepoRegistry(tmp_path)._data
+
+    def test_prune_expired_deletes_and_persists(self, tmp_path):
+        """Coder-only pruning removes expired entries from the store."""
+        reg = RepoRegistry(tmp_path)
+        old = datetime.now() - timedelta(days=9)
+        reg.update({"Akhetonics/stale"}, now=old)
+        reg.update({"Akhetonics/fresh"})
+        assert reg.prune_expired(8) == ["Akhetonics/fresh"]
+        assert "Akhetonics/stale" not in RepoRegistry(tmp_path)._data
+
+    def test_last_seen_accessor(self, tmp_path):
+        reg = RepoRegistry(tmp_path)
+        reg.update({"Akhetonics/a"})
+        assert reg.last_seen("Akhetonics/a")  # non-empty timestamp
+        assert reg.last_seen("Akhetonics/missing") is None
 
     def test_remove(self, tmp_path):
         reg = RepoRegistry(tmp_path)

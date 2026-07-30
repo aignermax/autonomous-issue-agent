@@ -703,7 +703,7 @@ class Dashboard:
         return Panel(text, border_style="cyan")
 
     def create_agent_panel(self, status: AgentStatus) -> Panel:
-        """Create agent status panel (coder + QA + PR-feedback roles)."""
+        """Compact columnar status: one column per role (coder/QA/PR-feedback)."""
         qa = self.monitor.get_qa_status()
         fb = self.monitor.get_pr_feedback_status()
 
@@ -711,186 +711,128 @@ class Dashboard:
             content = Text("[X] No agents running", style="bold red")
             return Panel(content, title="Agents Status", border_style="red")
 
-        table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column("Key", style="cyan")
-        table.add_column("Value")
+        table = Table(show_header=True, box=None, padding=(0, 2))
+        table.add_column("", style="cyan", width=10)
+        table.add_column("Coder", overflow="fold")
+        table.add_column("QA", overflow="fold")
+        table.add_column("PR-Feedback", overflow="fold")
 
-        if not status.is_running:
-            table.add_row("Coder", Text("[X] not running", style="red"))
-        else:
-            # Status indicator
-            if status.state == "working":
-                status_text = Text("[>] Worker", style="bold yellow")
-            elif status.state == "reviewing":
-                status_text = Text("[R] Reviewer", style="bold magenta")
-            elif status.state == "qa":
-                status_text = Text("[Q] QA-fix", style="bold blue")
-            elif status.state == "polling":
-                status_text = Text("[+] Polling", style="bold green")
-            elif status.state == "error":
-                status_text = Text("[X] Error", style="bold red")
-            else:
-                status_text = Text("[ ] Idle", style="dim")
+        def coder_state() -> Text:
+            if not status.is_running:
+                return Text("[X] not running", style="red")
+            mapping = {
+                "working": ("[>] Worker", "bold yellow"),
+                "reviewing": ("[R] Reviewer", "bold magenta"),
+                "qa": ("[Q] QA-fix", "bold blue"),
+                "polling": ("[+] Polling", "bold green"),
+                "error": ("[X] Error", "bold red"),
+            }
+            label, style = mapping.get(status.state, ("[ ] Idle", "dim"))
+            return Text(label, style=style)
 
-            table.add_row("Coder", status_text)
-            table.add_row("  PID", str(status.pid))
+        def role_state(info: dict, working_label: str) -> Text:
+            if not info["is_running"]:
+                return Text("[X] not running", style="red")
+            if info["state"] == working_label:
+                return Text("[W] " + working_label.capitalize(), style="bold blue")
+            if info["state"] == "polling":
+                return Text("[+] Polling", style="bold green")
+            return Text(info["state"], style="dim")
 
-            # Warning for duplicate coders
-            if status.duplicate_agents > 0:
-                warning_text = Text(f"WARNING: {status.duplicate_agents + 1} coder agents running!", style="bold red")
-                table.add_row("  WARNING", warning_text)
+        def age(delta) -> Text:
+            if delta is None:
+                return Text("-", style="dim")
+            s = int(delta.total_seconds())
+            if s < 60:
+                return Text(f"{s}s ago", style="green")
+            if s < 1800:
+                return Text(f"{s // 60}m ago", style="green" if s < 300 else "yellow")
+            return Text(f"{s // 60}m ago [!]", style="red")
 
-            if status.current_issue:
-                if status.issue_complexity:
-                    complexity_style = "bold yellow" if status.issue_complexity == "COMPLEX" else "cyan"
-                    issue_display = Text(f"#{status.current_issue} (")
-                    issue_display.append(status.issue_complexity, style=complexity_style)
-                    issue_display.append(")")
-                else:
-                    issue_display = f"#{status.current_issue}"
-                table.add_row("  Current Issue", issue_display)
-                if status.current_repo:
-                    table.add_row("  Repository", Text(status.current_repo, style="magenta"))
-                if status.current_pr:
-                    table.add_row("  Current PR", Text(f"#{status.current_pr}", style="magenta"))
-                if status.current_branch:
-                    table.add_row("  Working Branch", Text(status.current_branch, style="green"))
-                if status.current_turn and status.max_turns:
-                    table.add_row("  Progress", f"Turn {status.current_turn}/{status.max_turns}")
-            else:
-                table.add_row("  Current Issue", Text("None", style="dim"))
-                if status.current_pr:
-                    table.add_row("  Current PR", Text(f"#{status.current_pr}", style="magenta"))
+        table.add_row("Status", coder_state(),
+                      role_state(qa, "verifying"), role_state(fb, "working"))
+        table.add_row("PID",
+                      str(status.pid) if status.pid else "-",
+                      str(qa["pid"]) if qa["pid"] else "-",
+                      str(fb["pid"]) if fb["pid"] else "-")
 
-        # Last Activity (Heartbeat!)
-        if status.is_running and status.last_activity:
-            seconds = int(status.last_activity.total_seconds())
-            if seconds < 60:
-                activity_str = f"{seconds}s ago"
-                activity_color = "green"
-            elif seconds < 300:  # < 5 minutes
-                mins = seconds // 60
-                activity_str = f"{mins}m {seconds % 60}s ago"
-                activity_color = "green"
-            elif seconds < 1800:  # < 30 minutes
-                mins = seconds // 60
-                activity_str = f"{mins}m ago"
-                activity_color = "yellow"
-            elif seconds < 3600:  # < 1 hour
-                mins = seconds // 60
-                activity_str = f"{mins}m ago [!]"
-                activity_color = "yellow"
-            else:  # > 1 hour
-                hours = seconds // 3600
-                mins = (seconds % 3600) // 60
-                activity_str = f"{hours}h {mins}m ago [X]"
-                activity_color = "red"
+        # What each role is working on (issue/PR, repo, branch — multiline).
+        # current_pr shows even without an issue: during a long review/qa
+        # phase the 'Found issue' line can scroll out of the log tail.
+        coder_work = Text()
+        if status.current_issue:
+            coder_work.append(f"#{status.current_issue}")
+            if status.issue_complexity:
+                style = "bold yellow" if status.issue_complexity == "COMPLEX" else "cyan"
+                coder_work.append(" (")
+                coder_work.append(status.issue_complexity, style=style)
+                coder_work.append(")")
+        if status.current_pr:
+            if coder_work.plain:
+                coder_work.append("  ")
+            coder_work.append(f"PR #{status.current_pr}", style="magenta")
+        if status.current_repo:
+            coder_work.append(("\n" if coder_work.plain else "") + status.current_repo, style="magenta")
+        if status.current_branch:
+            coder_work.append("\n" + status.current_branch, style="green")
+        if not coder_work.plain:
+            coder_work = Text("-", style="dim")
+        qa_work = (Text(f"PR #{qa['current_pr']}", style="magenta")
+                   if qa["current_pr"] else Text("-", style="dim"))
+        fb_work = (Text(f"PR #{fb['current_pr']}", style="magenta")
+                   if fb["current_pr"] else Text("-", style="dim"))
+        table.add_row("Work", coder_work, qa_work, fb_work)
 
-            table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
+        table.add_row("Last Log", age(status.last_activity),
+                      age(qa["last_activity"]), age(fb["last_activity"]))
 
-        # CPU Usage
+        # Coder extras: session duration, CPU (with hang detection), next poll.
+        extras = Text()
+        if status.is_running and status.session_duration:
+            s = int(status.session_duration.total_seconds())
+            dur = f"{s // 3600}h{(s % 3600) // 60}m" if s >= 3600 else f"{s // 60}m{s % 60}s"
+            extras.append(f"session {dur}")
         if status.is_running and status.cpu_percent is not None:
-            if status.cpu_percent > 10:
-                cpu_str = f"{status.cpu_percent:.1f}% (active)"
-                cpu_color = "green"
-            elif status.cpu_percent > 0.5:
-                cpu_str = f"{status.cpu_percent:.1f}% (idle)"
-                cpu_color = "yellow"
+            if extras.plain:
+                extras.append("  ·  ")
+            # In an active phase, ~0% CPU means the subprocess is likely hung.
+            if status.state in ("working", "reviewing", "qa") and status.cpu_percent < 1.0:
+                extras.append(f"CPU {status.cpu_percent:.1f}% (hung?)", style="bold red")
             else:
-                # 0% CPU while a Claude subprocess should be running = hung?
-                if status.state in ("working", "reviewing", "qa"):
-                    cpu_str = f"{status.cpu_percent:.1f}% (hung?)"
-                    cpu_color = "red"
-                else:
-                    cpu_str = f"{status.cpu_percent:.1f}%"
-                    cpu_color = "dim"
-
-            table.add_row("  CPU Usage", Text(cpu_str, style=cpu_color))
-
-        # Session Duration (for any active Claude subprocess phase)
-        if status.is_running and status.session_duration and status.state in ("working", "reviewing", "qa"):
-            mins = int(status.session_duration.total_seconds() // 60)
-            secs = int(status.session_duration.total_seconds() % 60)
-            if mins < 60:
-                duration_str = f"{mins}m {secs}s"
-            else:
-                hours = mins // 60
-                mins = mins % 60
-                duration_str = f"{hours}h {mins}m"
-
-            table.add_row("  Session Time", duration_str)
-
-        # Next Poll (for polling state)
+                extras.append(f"CPU {status.cpu_percent:.1f}%")
         if status.is_running and status.next_poll_in:
-            mins = int(status.next_poll_in.total_seconds() // 60)
-            secs = int(status.next_poll_in.total_seconds() % 60)
-            table.add_row("  Next Poll", f"{mins}m {secs}s")
+            secs = int(status.next_poll_in.total_seconds())
+            if extras.plain:
+                extras.append("  ·  ")
+            extras.append(f"next poll {secs}s")
+        if extras.plain:
+            table.add_row("", extras, "", "")
 
-        # ── QA Agent (separate process, separate log) ─────────────────
-        if not qa["is_running"]:
-            table.add_row("QA", Text("[X] not running", style="red"))
-        else:
-            if qa["state"] == "verifying":
-                qa_state_text = Text("[V] Verifying", style="bold blue")
-            elif qa["state"] == "polling":
-                qa_state_text = Text("[+] Polling", style="bold green")
-            else:
-                qa_state_text = Text(qa["state"], style="dim")
-            table.add_row("QA", qa_state_text)
-            table.add_row("  PID", str(qa["pid"]))
-            if qa["duplicates"] > 0:
-                table.add_row("  WARNING",
-                              Text(f"{qa['duplicates'] + 1} QA agents running!", style="bold red"))
-            if qa["current_pr"]:
-                table.add_row("  Current PR", Text(f"#{qa['current_pr']}", style="magenta"))
-            if qa["last_activity"]:
-                s = int(qa["last_activity"].total_seconds())
-                if s < 60:
-                    activity_str, activity_color = f"{s}s ago", "green"
-                elif s < 1800:
-                    activity_str, activity_color = f"{s // 60}m ago", "green" if s < 300 else "yellow"
-                else:
-                    activity_str, activity_color = f"{s // 60}m ago [!]", "red"
-                table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
+        warn = []
+        if status.duplicate_agents > 0:
+            warn.append(f"{status.duplicate_agents + 1} coder agents running!")
+        if qa["duplicates"] > 0:
+            warn.append(f"{qa['duplicates'] + 1} QA agents running!")
+        if fb["duplicates"] > 0:
+            warn.append(f"{fb['duplicates'] + 1} pr-feedback agents running!")
+        if warn:
+            table.add_row("WARNING", Text(" / ".join(warn), style="bold red"), "", "")
 
-        # ── PR-Feedback Agent (reacts to @agent comments) ─────────────
-        if not fb["is_running"]:
-            table.add_row("PR-Feedback", Text("[X] not running", style="red"))
-        else:
-            if fb["state"] == "working":
-                fb_state_text = Text("[W] Working", style="bold blue")
-            elif fb["state"] == "polling":
-                fb_state_text = Text("[+] Polling", style="bold green")
-            else:
-                fb_state_text = Text(fb["state"], style="dim")
-            table.add_row("PR-Feedback", fb_state_text)
-            table.add_row("  PID", str(fb["pid"]))
-            if fb["duplicates"] > 0:
-                table.add_row("  WARNING",
-                              Text(f"{fb['duplicates'] + 1} pr-feedback agents running!", style="bold red"))
-            if fb["current_pr"]:
-                table.add_row("  Current PR", Text(f"#{fb['current_pr']}", style="magenta"))
-            if fb["last_activity"]:
-                s = int(fb["last_activity"].total_seconds())
-                if s < 60:
-                    activity_str, activity_color = f"{s}s ago", "green"
-                elif s < 1800:
-                    activity_str, activity_color = f"{s // 60}m ago", "green" if s < 300 else "yellow"
-                else:
-                    activity_str, activity_color = f"{s // 60}m ago [!]", "red"
-                table.add_row("  Last Log Entry", Text(activity_str, style=activity_color))
-
-        # Border green only if all are healthy; red if all stopped; yellow otherwise
-        if status.is_running and qa["is_running"] and fb["is_running"]:
-            border = "green"
-        elif not status.is_running and not qa["is_running"] and not fb["is_running"]:
-            border = "red"
-        else:
-            border = "yellow"
+        all_up = status.is_running and qa["is_running"] and fb["is_running"]
+        none_up = not (status.is_running or qa["is_running"] or fb["is_running"])
+        border = "green" if all_up else ("red" if none_up else "yellow")
         return Panel(table, title="Agents Status (Coder + QA + PR-Feedback)", border_style=border)
 
-    def create_config_panel(self, agent_status: Optional[AgentStatus] = None) -> Panel:
-        """Create configuration panel showing monitored repositories with branch info"""
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        """os.environ int with a safe fallback — a bad value must not crash a render."""
+        try:
+            return int(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
+    def create_config_panel(self) -> Panel:
+        """Configuration panel: org sweep, external repos, labels, intervals."""
         # .env is static config — load once per dashboard lifetime, not per
         # 2s refresh.
         if not getattr(self, "_dotenv_loaded", False):
@@ -902,96 +844,88 @@ class Dashboard:
         table.add_column("Setting", style="cyan", width=18)
         table.add_column("Value", style="white")
 
-        # Get repositories from environment
+        # External (manual) repos only — org repos are covered by the sweep.
+        # Honor legacy single-repo AGENT_REPO too (config.py still does).
         repos_str = os.environ.get("AGENT_REPOS", "")
-        if repos_str:
-            repos = [r.strip() for r in repos_str.split(",") if r.strip()]
-        else:
-            # Fallback to single repo mode
-            repos = [os.environ.get("AGENT_REPO", "Not configured")]
+        repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+        if not repos:
+            single = os.environ.get("AGENT_REPO", "").strip()
+            if single:
+                repos = [single]
+        org = os.environ.get("AGENT_DISCOVERY_ORG", "Akhetonics")
+        interval = self._env_int("AGENT_DISCOVERY_INTERVAL_SEC", 120)
 
-        # Reuse the status the caller already fetched (a refresh must not
-        # re-run the whole log/process scan just for this panel).
-        if agent_status is None:
-            agent_status = self.monitor.get_agent_status()
-        skip_api_calls = agent_status.is_running
+        if org:
+            sweep_info = f"[green]{org}[/green] [dim](auto-swept every {interval}s"
+            countdown = self._next_sweep_countdown(interval)
+            if countdown is not None:
+                sweep_info += f", next in {countdown}s"
+            sweep_info += ")[/dim]"
+            table.add_row("Org:", sweep_info)
+        table.add_row("External repos:", ", ".join(repos) if repos else "[dim](none)[/dim]")
 
-        # Display repository list with branch info
-        if len(repos) == 1:
-            table.add_row("Repository:", repos[0])
-            # Try to get working branch (dev if exists, otherwise default)
-            if not skip_api_calls:
-                branch_info = self._get_working_branch(repos[0])
-                if branch_info:
-                    table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
-            else:
-                # Use cached value when agent is working
-                if hasattr(self, '_branch_cache') and repos[0] in self._branch_cache:
-                    branch_info = self._branch_cache[repos[0]]
-                    table.add_row("  Base Branch:", f"[green]{branch_info}[/green]")
-        else:
-            table.add_row("Repositories:", f"{len(repos)} repos")
+        labels = " · ".join([
+            os.environ.get('AGENT_ISSUE_LABEL', 'agent-task'),
+            os.environ.get('AGENT_COMPLEXITY_TAG', 'complex'),
+            os.environ.get('AGENT_ECO_TAG', 'eco'),
+        ])
+        table.add_row("Labels:", labels)
+        table.add_row(
+            "Intervals:",
+            f"repo poll {os.environ.get('AGENT_POLL_INTERVAL', '15')}s · "
+            f"org sweep {interval}s")
 
-            # Display repos one by one (immediate display, no waiting)
-            for i, repo in enumerate(repos, 1):
-                if not skip_api_calls:
-                    # Fetch branch info synchronously but display immediately
-                    branch_info = self._get_working_branch(repo)
-                    if branch_info:
-                        table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
-                    else:
-                        table.add_row(f"  [{i}]", repo)
-                else:
-                    # Use cached value when agent is working
-                    if hasattr(self, '_branch_cache') and repo in self._branch_cache:
-                        branch_info = self._branch_cache[repo]
-                        table.add_row(f"  [{i}]", f"{repo} [dim]→ [green]{branch_info}[/green][/dim]")
-                    else:
-                        table.add_row(f"  [{i}]", repo)
-
-        # Show label configuration
-        table.add_row("", "")  # Empty row for spacing
-        activation_label = os.environ.get('AGENT_ISSUE_LABEL', 'agent-task')
-        complexity_tag = os.environ.get('AGENT_COMPLEXITY_TAG', 'complex')
-        table.add_row("Activation Label:", activation_label)
-        table.add_row("Complexity Tag:", complexity_tag)
-        table.add_row("Poll Interval:", f"{os.environ.get('AGENT_POLL_INTERVAL', '15')}s")
-
-        # Auto-discovered org repos (registry written by the coder's
-        # org-wide agent-task sweep; expire after N idle days).
+        # Auto-discovered org repos. READ-ONLY: active_repos never persists,
+        # so the dashboard cannot race the coder's registry writes.
         try:
             try:
                 from repo_discovery import RepoRegistry
             except ImportError:
                 from .repo_discovery import RepoRegistry
-            expiry_days = int(os.environ.get("AGENT_DISCOVERY_EXPIRY_DAYS", "8"))
+            expiry_days = self._env_int("AGENT_DISCOVERY_EXPIRY_DAYS", 8)
             registry = RepoRegistry(self.monitor.sessions_dir)
             auto_repos = registry.active_repos(expiry_days)
             if auto_repos:
-                table.add_row("", "")
                 table.add_row("Auto-discovered:", f"{len(auto_repos)} repo(s)")
                 for repo in auto_repos:
-                    entry = registry._data.get(repo, {})
                     days_left = ""
-                    try:
-                        last_seen = datetime.strptime(entry["last_seen"], "%Y-%m-%d %H:%M:%S")
-                        remaining = expiry_days - (datetime.now() - last_seen).days
-                        days_left = f" [dim](expires in {max(0, remaining)}d)[/dim]"
-                    except (KeyError, ValueError):
-                        pass
+                    last_seen_str = registry.last_seen(repo)
+                    if last_seen_str:
+                        try:
+                            last_seen = datetime.strptime(last_seen_str, "%Y-%m-%d %H:%M:%S")
+                            remaining = expiry_days - (datetime.now() - last_seen).days
+                            days_left = f" [dim](expires in {max(0, remaining)}d)[/dim]"
+                        except ValueError:
+                            pass
                     table.add_row("", f"[green]{repo}[/green]{days_left}")
         except Exception:
             pass
 
         return Panel(table, title="Configuration", border_style="cyan")
 
-    def _get_working_branch(self, repo_name: str) -> Optional[str]:
-        """Get working branch for a repository (dev if exists, otherwise default branch) (cached)"""
-        # PERFORMANCE FIX: Skip slow git ls-remote and GitHub API calls
-        # These were making dashboard refresh take 5+ seconds per repo!
-        # The target branch info is not critical for dashboard display
-        # User can see the actual working branch in Agent Status panel instead
-        return None
+    def _next_sweep_countdown(self, interval_sec: int) -> Optional[int]:
+        """Seconds until the coder's next org sweep (from the hints file ts).
+
+        Returns None when the hints are missing OR stale (coder stopped /
+        sweep broken) so the panel shows no misleading 'next in 0s' forever.
+        """
+        try:
+            import json as _json
+            try:
+                from repo_discovery import HINTS_FILENAME
+            except ImportError:
+                from .repo_discovery import HINTS_FILENAME
+            data = _json.loads(
+                (self.monitor.sessions_dir / HINTS_FILENAME).read_text(encoding="utf-8"))
+            last = datetime.strptime(data["ts"], "%Y-%m-%d %H:%M:%S")
+            elapsed = (datetime.now() - last).total_seconds()
+            # A sweep should have run within one interval; if the last one is
+            # older than 2x, the coder isn't sweeping — hide the countdown.
+            if elapsed > interval_sec * 2:
+                return None
+            return max(0, int(interval_sec - elapsed))
+        except Exception:
+            return None
 
     def create_history_panel(self, history: List[IssueHistory]) -> Panel:
         """Create issue history panel"""
@@ -1098,7 +1032,7 @@ class Dashboard:
         # Update layout
         layout["header"].update(self.create_header())
         layout["agent"].update(self.create_agent_panel(agent_status))
-        layout["mcp"].update(self.create_config_panel(agent_status))
+        layout["mcp"].update(self.create_config_panel())
         layout["history"].update(self.create_history_panel(history))
 
         # Footer

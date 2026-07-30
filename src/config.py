@@ -85,10 +85,10 @@ class Config:
         # effective repo list; repos expire after N days without label
         # activity. Empty org disables. Non-org repos stay manual.
         self.discovery_org: str = os.environ.get("AGENT_DISCOVERY_ORG", "Akhetonics")
-        # 4 search requests per sweep — 5min cadence is ~48 req/h, far below
+        # 4 search requests per sweep — 2min cadence is ~120 req/h, far below
         # the search API's 30/min budget.
         self.discovery_interval_sec: int = int(
-            os.environ.get("AGENT_DISCOVERY_INTERVAL_SEC", "300"))
+            os.environ.get("AGENT_DISCOVERY_INTERVAL_SEC", "120"))
         self.discovery_expiry_days: int = int(
             os.environ.get("AGENT_DISCOVERY_EXPIRY_DAYS", "8"))
 
