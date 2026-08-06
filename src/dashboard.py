@@ -303,10 +303,17 @@ class DashboardMonitor:
                 log_mtime = datetime.fromtimestamp(self.agent_log.stat().st_mtime)
                 last_activity = datetime.now() - log_mtime
 
-                # Read a generous tail. Worker phases can emit hundreds of
-                # "Claude Code activity" lines, so a small window drops the
-                # earlier phase markers (Found issue, Reviewer running, ...).
-                lines = tail_lines(self.agent_log, 1000)
+                # agent.log is shared by all three roles: QA + PR-feedback add
+                # ~32 heartbeat lines/min, so on a long coder run the coder's
+                # own "Found issue #N" marker gets pushed far out of a small
+                # tail and the panel falsely reads "polling". Read a large byte
+                # window and keep only coder lines (drop [qa]/[pr-feedback]) so
+                # the phase markers survive regardless of the other roles' spam.
+                raw = tail_lines(self.agent_log, 8000, max_bytes=2_000_000)
+                lines = [l for l in raw
+                         if "[qa]" not in l and "[pr-feedback]" not in l
+                         and "[qa-review]" not in l][-1200:]
+                coder_active = any("Claude Code activity" in l for l in lines[-15:])
 
                 # First pass: collect complexity + branch info from anywhere in
                 # the window (these can come from before the current phase).
@@ -391,15 +398,27 @@ class DashboardMonitor:
                             next_poll_in = timedelta(seconds=remaining)
                         break
 
-                # If we're past the worker phase (reviewing/qa), the original
-                # issue number is still useful context — find it independently.
-                if state in ("reviewing", "qa") and current_issue is None:
+                # Fallback: a very long worker run emits only sparse "Claude
+                # Code activity" lines, so even the coder-only window can miss
+                # the "Found issue" marker. Recent activity ⇒ still working.
+                if state == "polling" and coder_active:
+                    state = "working"
+
+                # For working/reviewing/qa, recover the issue number (and its
+                # repo) from the last "Found issue" marker anywhere in the
+                # window if the phase line itself didn't carry it.
+                if state in ("working", "reviewing", "qa") and current_issue is None:
                     for l in reversed(lines):
                         m = re.search(r'Found issue #(\d+)(?: in (\S+):)?', l)
                         if m:
                             current_issue = int(m.group(1))
                             if m.group(2):
                                 current_repo = m.group(2)
+                            if session_start_time is None:
+                                ts = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', l)
+                                if ts:
+                                    session_start_time = datetime.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S")
+                                    session_duration = datetime.now() - session_start_time
                             break
 
             except Exception:
