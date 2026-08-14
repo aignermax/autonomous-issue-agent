@@ -34,7 +34,7 @@ def _cfg(**over):
     base = dict(
         eco_tag="eco", eco_model="kimi-k2-thinking",
         eco_base_url="https://api.moonshot.ai/anthropic", eco_api_key=None,
-        coder_model="claude-fable-5",
+        coder_model="claude-fable-5", claudeapi_tag="claudeapi",
         openrouter_repos=["aignermax/Lunima"], openrouter_model="qwen/qwen3-coder",
         openrouter_base_url="https://openrouter.ai/api", openrouter_api_key="sk-or",
     )
@@ -79,6 +79,19 @@ def test_missing_openrouter_key_demotes_to_default():
 def test_repo_match_is_case_insensitive():
     model, _ = _mk("AigNerMax/Lunima")._worker_provider(_issue())
     assert model == "qwen/qwen3-coder"
+
+
+def test_claudeapi_label_forces_default_over_openrouter():
+    model, env = _mk("aignermax/Lunima")._worker_provider(_issue(labels=["claudeapi"]))
+    assert model == "claude-fable-5"
+    assert env == {}
+
+
+def test_claudeapi_label_wins_over_eco_too():
+    a = _mk("aignermax/Lunima", eco_api_key="sk-kimi")
+    model, env = a._worker_provider(_issue(labels=["eco", "claudeapi"]))
+    assert model == "claude-fable-5"
+    assert env == {}
 
 
 # --- live integration test (gated) -----------------------------------------

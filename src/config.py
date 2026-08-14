@@ -117,6 +117,10 @@ class Config:
             os.environ.get("AGENT_OPENROUTER_API_KEY"),
             os.environ.get("AGENT_OPENROUTER_KEY_FILE"))
 
+        # claudeapi label: force the default (premium Claude) provider on a
+        # single issue, overriding eco / OpenRouter-repo routing.
+        self.claudeapi_tag: str = os.environ.get("AGENT_CLAUDEAPI_TAG", "claudeapi")
+
         # Repo auto-discovery: every interval the coder runs ONE org-wide
         # issue search (label:agent-task is:open) and adds hit repos to the
         # effective repo list; repos expire after N days without label

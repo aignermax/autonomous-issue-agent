@@ -712,12 +712,15 @@ class Agent:
         result = self.git.run("ls-remote", "--heads", "origin", branch)
         return result.returncode == 0 and bool(result.stdout.strip())
 
+    @staticmethod
+    def _issue_has_label(issue, tag: str) -> bool:
+        if issue is None or not tag:
+            return False
+        return tag.lower() in (label.name.lower() for label in issue.labels)
+
     def _issue_is_eco(self, issue) -> bool:
         """True if the issue carries the eco (economy-mode) label."""
-        if issue is None:
-            return False
-        return self.config.eco_tag.lower() in (
-            label.name.lower() for label in issue.labels)
+        return self._issue_has_label(issue, self.config.eco_tag)
 
     @staticmethod
     def _anthropic_provider_env(base_url: str, api_key: str, model: str) -> dict:
@@ -737,13 +740,21 @@ class Agent:
 
         Precedence — most specific wins; reviewer/QA always stay on the
         default provider as a quality net:
-          1. eco label      → cheap endpoint (Moonshot/Kimi)
+          0. claudeapi label → force the default Claude provider (premium
+             escalation; overrides eco + OpenRouter repo routing)
+          1. eco label       → cheap endpoint (Moonshot/Kimi)
           2. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
           3. default         → AGENT_CODER_MODEL / CLI default
 
         A missing key demotes to the next option (never stalls an issue).
         """
         num = getattr(issue, "number", "?")
+
+        # 0) claudeapi label — explicit "use the premium Claude API", wins
+        # over the cheaper routings so an operator can escalate one issue.
+        if self._issue_has_label(issue, self.config.claudeapi_tag):
+            log.info(f"Issue #{num} '{self.config.claudeapi_tag}' tag → default Claude provider")
+            return self.config.coder_model, {}
 
         # 1) eco label
         if self._issue_is_eco(issue):
