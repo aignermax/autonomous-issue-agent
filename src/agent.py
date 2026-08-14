@@ -719,33 +719,55 @@ class Agent:
         return self.config.eco_tag.lower() in (
             label.name.lower() for label in issue.labels)
 
+    @staticmethod
+    def _anthropic_provider_env(base_url: str, api_key: str, model: str) -> dict:
+        """Env overrides pointing Claude Code at an Anthropic-compatible endpoint."""
+        return {
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": api_key,
+            "ANTHROPIC_API_KEY": api_key,
+            # Claude Code's auxiliary calls use a small/fast model whose
+            # Anthropic id doesn't exist on third-party endpoints.
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_SMALL_FAST_MODEL": model,
+        }
+
     def _worker_provider(self, issue) -> tuple:
         """(model, env_overrides) for a coder worker on this issue.
 
-        Eco-labeled issues run on the cheap Anthropic-compatible endpoint
-        (Moonshot/Kimi by default); reviewer/QA stay on the default provider
-        as a quality net. Without an eco API key the tag is ignored so a
-        missing secret can never silently stall an issue.
+        Precedence — most specific wins; reviewer/QA always stay on the
+        default provider as a quality net:
+          1. eco label      → cheap endpoint (Moonshot/Kimi)
+          2. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
+          3. default         → AGENT_CODER_MODEL / CLI default
+
+        A missing key demotes to the next option (never stalls an issue).
         """
-        if not self._issue_is_eco(issue):
-            return self.config.coder_model, {}
-        if not self.config.eco_api_key:
-            log.warning(
-                f"Issue #{issue.number} has '{self.config.eco_tag}' tag but "
-                "AGENT_ECO_API_KEY is not set — using default provider")
-            return self.config.coder_model, {}
-        log.info(
-            f"Issue #{issue.number} eco mode → {self.config.eco_model} "
-            f"@ {self.config.eco_base_url}")
-        return self.config.eco_model, {
-            "ANTHROPIC_BASE_URL": self.config.eco_base_url,
-            "ANTHROPIC_AUTH_TOKEN": self.config.eco_api_key,
-            "ANTHROPIC_API_KEY": self.config.eco_api_key,
-            # Claude Code's auxiliary calls use a small/fast model whose
-            # Anthropic id doesn't exist on third-party endpoints.
-            "ANTHROPIC_MODEL": self.config.eco_model,
-            "ANTHROPIC_SMALL_FAST_MODEL": self.config.eco_model,
-        }
+        num = getattr(issue, "number", "?")
+
+        # 1) eco label
+        if self._issue_is_eco(issue):
+            if self.config.eco_api_key:
+                log.info(f"Issue #{num} eco mode → {self.config.eco_model} @ {self.config.eco_base_url}")
+                return self.config.eco_model, self._anthropic_provider_env(
+                    self.config.eco_base_url, self.config.eco_api_key, self.config.eco_model)
+            log.warning(f"Issue #{num} has '{self.config.eco_tag}' tag but "
+                        "AGENT_ECO_API_KEY is not set — trying next provider")
+
+        # 2) OpenRouter per-repo
+        repo = (getattr(self, "current_repo_name", None) or "").lower()
+        if repo in {r.lower() for r in self.config.openrouter_repos}:
+            if self.config.openrouter_api_key:
+                log.info(f"Issue #{num} OpenRouter → {self.config.openrouter_model} "
+                         f"(repo {self.current_repo_name})")
+                return self.config.openrouter_model, self._anthropic_provider_env(
+                    self.config.openrouter_base_url, self.config.openrouter_api_key,
+                    self.config.openrouter_model)
+            log.warning(f"Repo {self.current_repo_name} is OpenRouter-routed but no "
+                        "OpenRouter key is configured — using default provider")
+
+        # 3) default
+        return self.config.coder_model, {}
 
     def _ensure_team_branch_exists(self, issue, team_branch: str) -> bool:
         """Make sure the declared team branch exists on origin, creating it

@@ -2,9 +2,30 @@
 Configuration management for Autonomous Issue Agent.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger("agent")
+
+
+def _as_repo_list(value: str) -> list:
+    """Comma-separated 'owner/repo' list → cleaned list."""
+    return [r.strip() for r in (value or "").split(",") if r.strip()]
+
+
+def _read_secret(inline: Optional[str], key_file: Optional[str]) -> Optional[str]:
+    """Secret from an inline env value, else from a file path (stripped)."""
+    if inline:
+        return inline.strip()
+    if key_file:
+        try:
+            content = Path(key_file).expanduser().read_text(encoding="utf-8").strip()
+            return content or None
+        except OSError as e:
+            log.warning(f"Could not read key file {key_file}: {e}")
+    return None
 
 
 class Config:
@@ -79,6 +100,22 @@ class Config:
         self.eco_api_key: Optional[str] = (
             os.environ.get("AGENT_ECO_API_KEY")
             or os.environ.get("MOONSHOT_API_KEY") or None)
+
+        # OpenRouter: route specific repos' CODER sessions through OpenRouter's
+        # Anthropic-compatible endpoint (cheap third-party coding models).
+        # Reviewer/QA stay on the default provider. Key from a file (keeps the
+        # secret out of .env) or AGENT_OPENROUTER_API_KEY.
+        self.openrouter_repos: list[str] = _as_repo_list(
+            os.environ.get("AGENT_OPENROUTER_REPOS", ""))
+        self.openrouter_model: str = os.environ.get(
+            "AGENT_OPENROUTER_MODEL", "qwen/qwen3-coder")
+        # BASE_URL is the Anthropic-endpoint root; Claude Code appends
+        # /v1/messages → https://openrouter.ai/api/v1/messages.
+        self.openrouter_base_url: str = os.environ.get(
+            "AGENT_OPENROUTER_BASE_URL", "https://openrouter.ai/api")
+        self.openrouter_api_key: Optional[str] = _read_secret(
+            os.environ.get("AGENT_OPENROUTER_API_KEY"),
+            os.environ.get("AGENT_OPENROUTER_KEY_FILE"))
 
         # Repo auto-discovery: every interval the coder runs ONE org-wide
         # issue search (label:agent-task is:open) and adds hit repos to the
