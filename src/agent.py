@@ -741,10 +741,13 @@ class Agent:
         Precedence — most specific wins; reviewer/QA always stay on the
         default provider as a quality net:
           0. claudeapi label → force the default Claude provider (premium
-             escalation; overrides eco + OpenRouter repo routing)
-          1. eco label       → cheap endpoint (Moonshot/Kimi)
-          2. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
-          3. default         → AGENT_CODER_MODEL / CLI default
+             escalation; overrides everything below)
+          1. eco label       → cheap endpoint (Moonshot/Kimi) — an explicit
+             "keep it cheap" that also overrides complex auto-tiering
+          2. complex label   → default Claude (auto-tier hard issues), when
+             AGENT_COMPLEX_USES_CLAUDE is on
+          3. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
+          4. default         → AGENT_CODER_MODEL / CLI default
 
         A missing key demotes to the next option (never stalls an issue).
         """
@@ -756,7 +759,7 @@ class Agent:
             log.info(f"Issue #{num} '{self.config.claudeapi_tag}' tag → default Claude provider")
             return self.config.coder_model, {}
 
-        # 1) eco label
+        # 1) eco label — explicit "keep it cheap", wins over complex.
         if self._issue_is_eco(issue):
             if self.config.eco_api_key:
                 log.info(f"Issue #{num} eco mode → {self.config.eco_model} @ {self.config.eco_base_url}")
@@ -765,7 +768,13 @@ class Agent:
             log.warning(f"Issue #{num} has '{self.config.eco_tag}' tag but "
                         "AGENT_ECO_API_KEY is not set — trying next provider")
 
-        # 2) OpenRouter per-repo
+        # 2) complex → premium Claude (auto-tiering for hard issues)
+        if self.config.complex_uses_claude and \
+                self._issue_has_label(issue, self.config.complexity_tag):
+            log.info(f"Issue #{num} '{self.config.complexity_tag}' → default Claude provider (auto-tier)")
+            return self.config.coder_model, {}
+
+        # 3) OpenRouter per-repo
         repo = (getattr(self, "current_repo_name", None) or "").lower()
         if repo in {r.lower() for r in self.config.openrouter_repos}:
             if self.config.openrouter_api_key:
@@ -777,7 +786,7 @@ class Agent:
             log.warning(f"Repo {self.current_repo_name} is OpenRouter-routed but no "
                         "OpenRouter key is configured — using default provider")
 
-        # 3) default
+        # 4) default
         return self.config.coder_model, {}
 
     def _ensure_team_branch_exists(self, issue, team_branch: str) -> bool:

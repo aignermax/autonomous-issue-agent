@@ -121,6 +121,12 @@ class Config:
         # single issue, overriding eco / OpenRouter-repo routing.
         self.claudeapi_tag: str = os.environ.get("AGENT_CLAUDEAPI_TAG", "claudeapi")
 
+        # Auto-tiering: complex issues run their coder on the premium Claude
+        # provider (hard work → best model), unless an explicit eco/claudeapi
+        # label says otherwise. Set false to keep complex = budget only.
+        self.complex_uses_claude: bool = os.environ.get(
+            "AGENT_COMPLEX_USES_CLAUDE", "true").lower() == "true"
+
         # Repo auto-discovery: every interval the coder runs ONE org-wide
         # issue search (label:agent-task is:open) and adds hit repos to the
         # effective repo list; repos expire after N days without label

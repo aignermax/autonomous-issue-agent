@@ -35,6 +35,7 @@ def _cfg(**over):
         eco_tag="eco", eco_model="kimi-k2-thinking",
         eco_base_url="https://api.moonshot.ai/anthropic", eco_api_key=None,
         coder_model="claude-fable-5", claudeapi_tag="claudeapi",
+        complexity_tag="complex", complex_uses_claude=True,
         openrouter_repos=["aignermax/Lunima"], openrouter_model="qwen/qwen3-coder",
         openrouter_base_url="https://openrouter.ai/api", openrouter_api_key="sk-or",
     )
@@ -92,6 +93,24 @@ def test_claudeapi_label_wins_over_eco_too():
     model, env = a._worker_provider(_issue(labels=["eco", "claudeapi"]))
     assert model == "claude-fable-5"
     assert env == {}
+
+
+def test_complex_auto_tiers_to_claude_over_openrouter():
+    model, env = _mk("aignermax/Lunima")._worker_provider(_issue(labels=["complex"]))
+    assert model == "claude-fable-5"
+    assert env == {}
+
+
+def test_eco_wins_over_complex_autotier():
+    a = _mk("aignermax/Lunima", eco_api_key="sk-kimi")
+    model, env = a._worker_provider(_issue(labels=["complex", "eco"]))
+    assert model == "kimi-k2-thinking"  # explicit cheap beats complex→Claude
+
+
+def test_complex_autotier_can_be_disabled():
+    a = _mk("aignermax/Lunima", complex_uses_claude=False)
+    model, _ = a._worker_provider(_issue(labels=["complex"]))
+    assert model == "qwen/qwen3-coder"  # falls through to OpenRouter
 
 
 # --- live integration test (gated) -----------------------------------------
