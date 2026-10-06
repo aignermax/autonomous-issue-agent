@@ -1,5 +1,6 @@
 """Tests for the PR-feedback agent (src/agents/pr_feedback_agent.py)."""
 from datetime import datetime
+import pytest
 from types import SimpleNamespace
 
 from src.agents.pr_feedback_agent import (
@@ -207,3 +208,39 @@ def test_disabled_policy_replies_instead_of_silent_swallow(tmp_path):
     assert any("not" in c and "enabled" in c for c in pr.comments)
     assert a.state.processed_ids("o/r#43") == [6]
     a.claude_factory.assert_not_called()
+
+
+def _fb_agent_with_policy(tmp_path, issue_labels):
+    from unittest.mock import MagicMock
+    from tests.test_openrouter import _cfg
+    a = _fb_agent_for_handling(tmp_path)
+    a.config = _cfg(openrouter_force_repos=["aignermax/Lunima"],
+                    openrouter_model="moonshotai/kimi-k3", premium_coder_model="claude-opus-5-5",
+                    pr_feedback_max_rounds=3, pr_feedback_max_turns=10,
+                    pr_feedback_marker="@agent", tools_dir=None, tools_python=None)
+    a.current_repo_name = "aignermax/Lunima"
+    a._load_repo_policy = lambda: SimpleNamespace(is_agent_enabled=lambda role: True)
+    a._checkout_pr_branch = lambda branch: None
+    a._reply = MagicMock()
+    a.github.repo.get_issue.return_value = SimpleNamespace(
+        labels=[SimpleNamespace(name=n) for n in issue_labels])
+    a.claude_factory.return_value.execute.return_value = ("done", False, None)
+    return a
+
+
+@pytest.mark.parametrize("issue_labels,expected", [
+    ([], "moonshotai/kimi-k3"),             # forced repo → OpenRouter
+    (["claudeapi"], "claude-opus-5-5"),      # linked issue's claudeapi label escapes it
+])
+def test_pr_feedback_worker_follows_provider_policy(tmp_path, monkeypatch, issue_labels, expected):
+    import src.agents.pr_feedback_agent as fb
+    monkeypatch.setattr(fb, "publish_walkthrough", lambda *a, **k: "")
+    a = _fb_agent_with_policy(tmp_path, issue_labels)
+    pr = _StubPR()
+    pr.head = SimpleNamespace(ref="agent/issue-7", repo=SimpleNamespace(full_name="aignermax/Lunima"))
+    pr.body = "Closes #7"
+    pr.labels = []
+    a._handle_feedback(pr, "aignermax/Lunima#42", SimpleNamespace(id=9, body="@agent fix it"))
+    kwargs = a.claude_factory.call_args.kwargs
+    assert kwargs["model"] == expected
+    assert ("ANTHROPIC_BASE_URL" in kwargs["env_overrides"]) == (expected == "moonshotai/kimi-k3")

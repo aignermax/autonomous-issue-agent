@@ -34,6 +34,7 @@ from ..config import Config
 from ..git_repo import GitRepo
 from ..github_client import GitHubClient
 from ..pr_media import publish_walkthrough
+from .. import provider_policy
 from .agent_config import ProjectConfig, load_project_config_from_text
 
 log = logging.getLogger("agent")
@@ -210,6 +211,12 @@ class PRFeedbackAgent:
                 return
             raise
 
+        try:
+            provider_policy.check_ready(self.config, repo_name)
+        except provider_policy.ProviderUnavailable as e:
+            log.error(f"[pr-feedback] skipping {repo_name}: {e}")
+            return
+
         assert self.github is not None
         marker = self.config.pr_feedback_marker
         for pr in self.github.repo.get_pulls(
@@ -320,10 +327,17 @@ class PRFeedbackAgent:
             issue_number = extract_issue_number(pr.body or "", pr.number)
             prompt = self._build_prompt(pr, branch, comment, issue_number)
 
+            # Same provider policy as the coder: labels of the PR and of the
+            # issue it implements decide (claudeapi, forced repo, eco, complex).
+            model, env = provider_policy.select_coder_provider(
+                self.config, self.current_repo_name or "",
+                provider_policy.labels_of(pr, self._linked_issue(pr, issue_number)),
+                issue_number)
             worker = self.claude_factory(
                 working_dir=self.git.path,
                 max_turns=self.config.pr_feedback_max_turns,
-                model=self.config.coder_model,
+                model=model,
+                env_overrides=env,
             )
             output, reached_max, _usage = worker.execute(prompt)
             if reached_max:
@@ -372,6 +386,16 @@ class PRFeedbackAgent:
             issue_number=issue_number,
             tools_dir=tools_dir, tools_python=tools_python,
         )
+
+    def _linked_issue(self, pr, issue_number: int):
+        """The issue this PR implements (for its labels), or None."""
+        if issue_number == pr.number:
+            return None
+        try:
+            return self.github.repo.get_issue(issue_number)
+        except Exception as e:
+            log.warning(f"[pr-feedback] could not load issue #{issue_number}: {e}")
+            return None
 
     def _load_repo_policy(self) -> ProjectConfig:
         """Read .agent.toml from origin's DEFAULT branch (current repo policy)."""

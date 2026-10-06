@@ -14,6 +14,7 @@ from typing import Optional
 from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
+from . import provider_policy
 from .github_client import GitHubClient
 from .repo_discovery import (
     RepoRegistry,
@@ -718,76 +719,15 @@ class Agent:
             return False
         return tag.lower() in (label.name.lower() for label in issue.labels)
 
-    def _issue_is_eco(self, issue) -> bool:
-        """True if the issue carries the eco (economy-mode) label."""
-        return self._issue_has_label(issue, self.config.eco_tag)
-
-    @staticmethod
-    def _anthropic_provider_env(base_url: str, api_key: str, model: str) -> dict:
-        """Env overrides pointing Claude Code at an Anthropic-compatible endpoint."""
-        return {
-            "ANTHROPIC_BASE_URL": base_url,
-            "ANTHROPIC_AUTH_TOKEN": api_key,
-            "ANTHROPIC_API_KEY": api_key,
-            # Claude Code's auxiliary calls use a small/fast model whose
-            # Anthropic id doesn't exist on third-party endpoints.
-            "ANTHROPIC_MODEL": model,
-            "ANTHROPIC_SMALL_FAST_MODEL": model,
-        }
-
     def _worker_provider(self, issue) -> tuple:
         """(model, env_overrides) for a coder worker on this issue.
 
-        Precedence — most specific wins; reviewer/QA always stay on the
-        default provider as a quality net:
-          0. claudeapi label → force the default Claude provider (premium
-             escalation; overrides everything below)
-          1. eco label       → cheap endpoint (Moonshot/Kimi) — an explicit
-             "keep it cheap" that also overrides complex auto-tiering
-          2. complex label   → default Claude (auto-tier hard issues), when
-             AGENT_COMPLEX_USES_CLAUDE is on
-          3. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
-          4. default         → AGENT_CODER_MODEL / CLI default
-
-        A missing key demotes to the next option (never stalls an issue).
+        See src/provider_policy.py for the precedence (claudeapi → forced repo
+        → eco in cleared repos → complex → OpenRouter repo → default).
         """
-        num = getattr(issue, "number", "?")
-
-        # 0) claudeapi label — explicit "use the premium Claude API", wins
-        # over the cheaper routings so an operator can escalate one issue.
-        if self._issue_has_label(issue, self.config.claudeapi_tag):
-            log.info(f"Issue #{num} '{self.config.claudeapi_tag}' tag → default Claude provider")
-            return self.config.coder_model, {}
-
-        # 1) eco label — explicit "keep it cheap", wins over complex.
-        if self._issue_is_eco(issue):
-            if self.config.eco_api_key:
-                log.info(f"Issue #{num} eco mode → {self.config.eco_model} @ {self.config.eco_base_url}")
-                return self.config.eco_model, self._anthropic_provider_env(
-                    self.config.eco_base_url, self.config.eco_api_key, self.config.eco_model)
-            log.warning(f"Issue #{num} has '{self.config.eco_tag}' tag but "
-                        "AGENT_ECO_API_KEY is not set — trying next provider")
-
-        # 2) complex → premium Claude (auto-tiering for hard issues)
-        if self.config.complex_uses_claude and \
-                self._issue_has_label(issue, self.config.complexity_tag):
-            log.info(f"Issue #{num} '{self.config.complexity_tag}' → default Claude provider (auto-tier)")
-            return self.config.coder_model, {}
-
-        # 3) OpenRouter per-repo
-        repo = (getattr(self, "current_repo_name", None) or "").lower()
-        if repo in {r.lower() for r in self.config.openrouter_repos}:
-            if self.config.openrouter_api_key:
-                log.info(f"Issue #{num} OpenRouter → {self.config.openrouter_model} "
-                         f"(repo {self.current_repo_name})")
-                return self.config.openrouter_model, self._anthropic_provider_env(
-                    self.config.openrouter_base_url, self.config.openrouter_api_key,
-                    self.config.openrouter_model)
-            log.warning(f"Repo {self.current_repo_name} is OpenRouter-routed but no "
-                        "OpenRouter key is configured — using default provider")
-
-        # 4) default
-        return self.config.coder_model, {}
+        return provider_policy.select_coder_provider(
+            self.config, getattr(self, "current_repo_name", None) or "",
+            provider_policy.labels_of(issue), getattr(issue, "number", "?"))
 
     def _ensure_team_branch_exists(self, issue, team_branch: str) -> bool:
         """Make sure the declared team branch exists on origin, creating it
@@ -1521,6 +1461,14 @@ class Agent:
                 RepoRegistry(self.config.session_dir).remove(repo_name)
                 return
             raise
+
+        # A forced repo without its mandatory provider must not claim work:
+        # the session could only fail after the issue/PR was already taken.
+        try:
+            provider_policy.check_ready(self.config, repo_name)
+        except provider_policy.ProviderUnavailable as e:
+            log.error(f"Skipping {repo_name}: {e}")
+            return
 
         # Phase 2: prioritize fixing QA-failed PRs over starting new work.
         # If we processed one this cycle, defer the new-issue scan to the

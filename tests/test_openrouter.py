@@ -34,10 +34,12 @@ def _cfg(**over):
     base = dict(
         eco_tag="eco", eco_model="kimi-k2-thinking",
         eco_base_url="https://api.moonshot.ai/anthropic", eco_api_key=None,
-        coder_model="claude-fable-5", claudeapi_tag="claudeapi",
+        coder_model="claude-fable-5", premium_coder_model="claude-opus-5-5",
+        claudeapi_tag="claudeapi",
         complexity_tag="complex", complex_uses_claude=True,
         openrouter_repos=["aignermax/Lunima"], openrouter_model="qwen/qwen3-coder",
         openrouter_base_url="https://openrouter.ai/api", openrouter_api_key="sk-or",
+        openrouter_force_repos=[],
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -84,20 +86,20 @@ def test_repo_match_is_case_insensitive():
 
 def test_claudeapi_label_forces_default_over_openrouter():
     model, env = _mk("aignermax/Lunima")._worker_provider(_issue(labels=["claudeapi"]))
-    assert model == "claude-fable-5"
+    assert model == "claude-opus-5-5"
     assert env == {}
 
 
 def test_claudeapi_label_wins_over_eco_too():
     a = _mk("aignermax/Lunima", eco_api_key="sk-kimi")
     model, env = a._worker_provider(_issue(labels=["eco", "claudeapi"]))
-    assert model == "claude-fable-5"
+    assert model == "claude-opus-5-5"
     assert env == {}
 
 
 def test_complex_auto_tiers_to_claude_over_openrouter():
     model, env = _mk("aignermax/Lunima")._worker_provider(_issue(labels=["complex"]))
-    assert model == "claude-fable-5"
+    assert model == "claude-opus-5-5"
     assert env == {}
 
 
@@ -151,3 +153,69 @@ def test_openrouter_anthropic_endpoint_live():
     assert data.get("role") == "assistant"
     text = "".join(b.get("text", "") for b in data.get("content", []))
     assert "PONG" in text.upper()
+
+
+@pytest.mark.parametrize("labels", [[], ["complex"], ["eco"], ["complex", "eco"]])
+def test_forced_lunima_policy_overrides_cost_labels(labels):
+    a = _mk("AignerMax/Lunima", openrouter_force_repos=["aignermax/Lunima"],
+            openrouter_model="moonshotai/kimi-k3", eco_api_key="eco-test")
+    model, env = a._worker_provider(_issue(labels=labels))
+    assert model == "moonshotai/kimi-k3"
+    assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+
+
+@pytest.mark.parametrize("labels", [["claudeapi"], ["complex", "eco", "claudeapi"]])
+def test_claudeapi_label_escapes_forced_repo(labels):
+    """claudeapi always means 'my Claude API' — also in a forced Kimi repo."""
+    a = _mk("aignermax/Lunima", openrouter_force_repos=["aignermax/Lunima"])
+    assert a._worker_provider(_issue(labels=labels)) == ("claude-opus-5-5", {})
+
+
+def test_eco_label_ignored_for_internal_repo():
+    """Internal repos never leave the Claude API, even with an eco key set."""
+    a = _mk("Akhetonics/khepri", eco_api_key="sk-kimi")
+    assert a._worker_provider(_issue(labels=["eco"])) == ("claude-fable-5", {})
+    assert a._worker_provider(_issue(labels=["eco", "complex"])) == ("claude-opus-5-5", {})
+
+
+def test_check_ready_blocks_forced_repo_without_key():
+    """run_once skips such a repo before claiming anything."""
+    from src.provider_policy import check_ready, ProviderUnavailable
+    with pytest.raises(ProviderUnavailable):
+        check_ready(_cfg(openrouter_force_repos=["aignermax/Lunima"], openrouter_api_key=None),
+                    "AignerMax/Lunima")
+    check_ready(_cfg(openrouter_force_repos=["aignermax/Lunima"]), "aignermax/Lunima")
+    check_ready(_cfg(openrouter_api_key=None), "Akhetonics/khepri")
+
+
+def test_run_once_skips_forced_repo_without_key_before_claiming():
+    a = _mk("aignermax/Lunima", openrouter_force_repos=["aignermax/Lunima"],
+            openrouter_api_key=None, repo_names=["aignermax/Lunima"],
+            session_dir=Path("."), discovery_interval_sec=60)
+    a._last_repo_index = -1
+    a._maybe_discover_repos = lambda: None
+    a._effective_repos = lambda: ["aignermax/Lunima"]
+    a._setup_for_repo = lambda name: setattr(a, "current_repo_name", name)
+    a._check_qa_failed_prs = MagicMock(return_value=False)
+    a.github = MagicMock()
+    a.run_once()
+    a._check_qa_failed_prs.assert_not_called()
+    a.github.find_next_issue.assert_not_called()
+
+
+def test_labels_of_merges_pr_and_issue_labels():
+    from src.provider_policy import labels_of
+    pr = _issue(labels=["agent-pr"])
+    issue = _issue(labels=["ClaudeAPI"])
+    assert labels_of(pr, issue, None) == {"agent-pr", "claudeapi"}
+
+
+def test_forced_lunima_does_not_change_other_repositories():
+    a = _mk("Akhetonics/khepri", openrouter_force_repos=["aignermax/Lunima"])
+    assert a._worker_provider(_issue(labels=["complex"])) == ("claude-opus-5-5", {})
+
+
+def test_forced_provider_missing_key_never_falls_back_to_premium():
+    a = _mk("aignermax/Lunima", openrouter_force_repos=["aignermax/Lunima"], openrouter_api_key=None)
+    with pytest.raises(RuntimeError, match="no premium fallback"):
+        a._worker_provider(_issue(labels=["complex"]))

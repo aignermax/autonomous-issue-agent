@@ -22,7 +22,7 @@ _AGENT_FOOTER = """
 **On an issue:**
 - `agent-task` — the agent picks it up and implements it
 - `complex` — bigger budget + a UX design pass + a step-by-step screenshot walkthrough, and runs the coder on the premium Claude model
-- **Cost tier** (coder model): `eco` = cheapest · *(no tier label)* = repo default · `claudeapi` = force premium Claude
+- **Cost tier** (coder model): `eco` = cheapest (only in third-party-cleared, non-forced repos; ignored elsewhere) · *(no tier label)* = repo default · `claudeapi` = force premium Claude (wins everywhere)
 - `Team branch: team/x` — branch off `team/x` and target the PR at it (auto-created if missing)
 
 **On this PR:**
