@@ -116,7 +116,7 @@ class TestConfig:
         assert c.max_review_rounds_complex == 2
         assert c.max_review_rounds == 2  # legacy alias = complex default
         assert c.reviewer_model_default == "claude-sonnet-4-6"
-        assert c.reviewer_model_critical == "claude-opus-4-7"
+        assert c.reviewer_model_critical == "claude-opus-5-5"
         assert c.critical_label == "critical"
         assert c.reviewer_max_turns == 80
 

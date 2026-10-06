@@ -20,6 +20,11 @@ def _eco_agent(api_key="sk-kimi"):
     agent.config.eco_base_url = "https://api.moonshot.ai/anthropic"
     agent.config.eco_api_key = api_key
     agent.config.coder_model = "claude-fable-5"
+    # eco is only honoured in repos cleared for third-party providers
+    agent.current_repo_name = "aignermax/Lunima"
+    agent.config.openrouter_repos = ["aignermax/Lunima"]
+    agent.config.openrouter_force_repos = []
+    agent.config.openrouter_api_key = None
     return agent
 
 

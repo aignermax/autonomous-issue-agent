@@ -83,10 +83,14 @@ class Config:
         self.reviewer_model_default: str = os.environ.get(
             "AGENT_REVIEWER_MODEL", "claude-sonnet-4-6")
         self.reviewer_model_critical: str = os.environ.get(
-            "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-4-7")
+            "AGENT_REVIEWER_MODEL_CRITICAL", "claude-opus-5-5")
         # Coder (worker) model. None => use the Claude Code CLI default.
         # Set AGENT_CODER_MODEL (e.g. "claude-fable-5") to override.
         self.coder_model: Optional[str] = os.environ.get("AGENT_CODER_MODEL") or None
+        # Premium coder model for the escalation paths (complex auto-tier and
+        # the claudeapi label). Falls back to the regular coder model.
+        self.premium_coder_model: Optional[str] = (
+            os.environ.get("AGENT_PREMIUM_CODER_MODEL") or self.coder_model)
 
         # Eco mode: issues labeled with the eco tag run their CODER sessions
         # on a cheap Anthropic-compatible endpoint (default: Moonshot/Kimi
@@ -107,6 +111,9 @@ class Config:
         # secret out of .env) or AGENT_OPENROUTER_API_KEY.
         self.openrouter_repos: list[str] = _as_repo_list(
             os.environ.get("AGENT_OPENROUTER_REPOS", ""))
+        # Explicit repository policy overrides labels and complex auto-tiering.
+        self.openrouter_force_repos: list[str] = _as_repo_list(
+            os.environ.get("AGENT_OPENROUTER_FORCE_REPOS", ""))
         self.openrouter_model: str = os.environ.get(
             "AGENT_OPENROUTER_MODEL", "qwen/qwen3-coder")
         # BASE_URL is the Anthropic-endpoint root; Claude Code appends

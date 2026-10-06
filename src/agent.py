@@ -740,27 +740,49 @@ class Agent:
 
         Precedence — most specific wins; reviewer/QA always stay on the
         default provider as a quality net:
-          0. claudeapi label → force the default Claude provider (premium
-             escalation; overrides everything below)
-          1. eco label       → cheap endpoint (Moonshot/Kimi) — an explicit
-             "keep it cheap" that also overrides complex auto-tiering
-          2. complex label   → default Claude (auto-tier hard issues), when
+          0. claudeapi label → premium Claude model on the Claude API, in
+             every repo (explicit escalation; overrides everything below)
+          1. forced repo     → OpenRouter (AGENT_OPENROUTER_FORCE_REPOS);
+             overrides eco/complex, never falls back to premium Claude
+          2. eco label       → cheap endpoint (Moonshot/Kimi) — only in
+             third-party-allowed repos; ignored (warning) everywhere else
+          3. complex label   → premium Claude model (auto-tier), when
              AGENT_COMPLEX_USES_CLAUDE is on
-          3. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
-          4. default         → AGENT_CODER_MODEL / CLI default
+          4. OpenRouter repo → OpenRouter's Anthropic endpoint (per-repo)
+          5. default         → AGENT_CODER_MODEL / CLI default
 
-        A missing key demotes to the next option (never stalls an issue).
+        Third-party providers (OpenRouter, eco) are confined to the repos in
+        AGENT_OPENROUTER_REPOS / AGENT_OPENROUTER_FORCE_REPOS: internal code
+        never leaves the Claude API. Outside forced repos a missing key
+        demotes to the next option (never stalls an issue).
         """
         num = getattr(issue, "number", "?")
+        repo = (getattr(self, "current_repo_name", None) or "").lower()
 
         # 0) claudeapi label — explicit "use the premium Claude API", wins
-        # over the cheaper routings so an operator can escalate one issue.
+        # everywhere, including forced repos, so an operator can escalate one issue.
         if self._issue_has_label(issue, self.config.claudeapi_tag):
-            log.info(f"Issue #{num} '{self.config.claudeapi_tag}' tag → default Claude provider")
-            return self.config.coder_model, {}
+            log.info(f"Issue #{num} '{self.config.claudeapi_tag}' tag → premium Claude "
+                     f"({self.config.premium_coder_model})")
+            return self.config.premium_coder_model, {}
 
-        # 1) eco label — explicit "keep it cheap", wins over complex.
-        if self._issue_is_eco(issue):
+        # 1) Operator-enforced repository routing wins over the other labels.
+        # Never silently spend premium-provider budget when its key is missing.
+        forced = getattr(self.config, "openrouter_force_repos", [])
+        if repo in {r.lower() for r in forced}:
+            if not self.config.openrouter_api_key:
+                raise RuntimeError(f"Required OpenRouter key missing for {repo}; no premium fallback")
+            log.info(f"Issue #{num} forced OpenRouter → {self.config.openrouter_model} (repo {repo})")
+            return self.config.openrouter_model, self._anthropic_provider_env(
+                self.config.openrouter_base_url, self.config.openrouter_api_key,
+                self.config.openrouter_model)
+
+        # 2) eco label — explicit "keep it cheap", wins over complex, but only
+        # where third-party providers are allowed at all.
+        if self._issue_is_eco(issue) and not self._third_party_allowed(repo):
+            log.warning(f"Issue #{num} has '{self.config.eco_tag}' tag but repo {repo or '?'} "
+                        "is not cleared for third-party providers — ignoring eco")
+        elif self._issue_is_eco(issue):
             if self.config.eco_api_key:
                 log.info(f"Issue #{num} eco mode → {self.config.eco_model} @ {self.config.eco_base_url}")
                 return self.config.eco_model, self._anthropic_provider_env(
@@ -768,14 +790,14 @@ class Agent:
             log.warning(f"Issue #{num} has '{self.config.eco_tag}' tag but "
                         "AGENT_ECO_API_KEY is not set — trying next provider")
 
-        # 2) complex → premium Claude (auto-tiering for hard issues)
+        # 3) complex → premium Claude (auto-tiering for hard issues)
         if self.config.complex_uses_claude and \
                 self._issue_has_label(issue, self.config.complexity_tag):
-            log.info(f"Issue #{num} '{self.config.complexity_tag}' → default Claude provider (auto-tier)")
-            return self.config.coder_model, {}
+            log.info(f"Issue #{num} '{self.config.complexity_tag}' → premium Claude "
+                     f"({self.config.premium_coder_model}, auto-tier)")
+            return self.config.premium_coder_model, {}
 
-        # 3) OpenRouter per-repo
-        repo = (getattr(self, "current_repo_name", None) or "").lower()
+        # 4) OpenRouter per-repo
         if repo in {r.lower() for r in self.config.openrouter_repos}:
             if self.config.openrouter_api_key:
                 log.info(f"Issue #{num} OpenRouter → {self.config.openrouter_model} "
@@ -786,8 +808,18 @@ class Agent:
             log.warning(f"Repo {self.current_repo_name} is OpenRouter-routed but no "
                         "OpenRouter key is configured — using default provider")
 
-        # 4) default
+        # 5) default
         return self.config.coder_model, {}
+
+    def _third_party_allowed(self, repo: str) -> bool:
+        """True if this repo may run on third-party providers (OpenRouter/eco).
+
+        Only repos explicitly listed for OpenRouter qualify; everything else
+        is internal and stays on the Claude API.
+        """
+        allowed = list(self.config.openrouter_repos) + \
+            list(getattr(self.config, "openrouter_force_repos", []))
+        return bool(repo) and repo.lower() in {r.lower() for r in allowed}
 
     def _ensure_team_branch_exists(self, issue, team_branch: str) -> bool:
         """Make sure the declared team branch exists on origin, creating it

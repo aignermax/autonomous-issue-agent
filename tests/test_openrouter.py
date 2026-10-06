@@ -34,7 +34,8 @@ def _cfg(**over):
     base = dict(
         eco_tag="eco", eco_model="kimi-k2-thinking",
         eco_base_url="https://api.moonshot.ai/anthropic", eco_api_key=None,
-        coder_model="claude-fable-5", claudeapi_tag="claudeapi",
+        coder_model="claude-fable-5", premium_coder_model="claude-opus-5-5",
+        claudeapi_tag="claudeapi",
         complexity_tag="complex", complex_uses_claude=True,
         openrouter_repos=["aignermax/Lunima"], openrouter_model="qwen/qwen3-coder",
         openrouter_base_url="https://openrouter.ai/api", openrouter_api_key="sk-or",
@@ -84,20 +85,20 @@ def test_repo_match_is_case_insensitive():
 
 def test_claudeapi_label_forces_default_over_openrouter():
     model, env = _mk("aignermax/Lunima")._worker_provider(_issue(labels=["claudeapi"]))
-    assert model == "claude-fable-5"
+    assert model == "claude-opus-5-5"
     assert env == {}
 
 
 def test_claudeapi_label_wins_over_eco_too():
     a = _mk("aignermax/Lunima", eco_api_key="sk-kimi")
     model, env = a._worker_provider(_issue(labels=["eco", "claudeapi"]))
-    assert model == "claude-fable-5"
+    assert model == "claude-opus-5-5"
     assert env == {}
 
 
 def test_complex_auto_tiers_to_claude_over_openrouter():
     model, env = _mk("aignermax/Lunima")._worker_provider(_issue(labels=["complex"]))
-    assert model == "claude-fable-5"
+    assert model == "claude-opus-5-5"
     assert env == {}
 
 
@@ -151,3 +152,37 @@ def test_openrouter_anthropic_endpoint_live():
     assert data.get("role") == "assistant"
     text = "".join(b.get("text", "") for b in data.get("content", []))
     assert "PONG" in text.upper()
+
+
+@pytest.mark.parametrize("labels", [[], ["complex"], ["eco"], ["complex", "eco"]])
+def test_forced_lunima_policy_overrides_cost_labels(labels):
+    a = _mk("AignerMax/Lunima", openrouter_force_repos=["aignermax/Lunima"],
+            openrouter_model="moonshotai/kimi-k3", eco_api_key="eco-test")
+    model, env = a._worker_provider(_issue(labels=labels))
+    assert model == "moonshotai/kimi-k3"
+    assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+
+
+@pytest.mark.parametrize("labels", [["claudeapi"], ["complex", "eco", "claudeapi"]])
+def test_claudeapi_label_escapes_forced_repo(labels):
+    """claudeapi always means 'my Claude API' — also in a forced Kimi repo."""
+    a = _mk("aignermax/Lunima", openrouter_force_repos=["aignermax/Lunima"])
+    assert a._worker_provider(_issue(labels=labels)) == ("claude-opus-5-5", {})
+
+
+def test_eco_label_ignored_for_internal_repo():
+    """Internal repos never leave the Claude API, even with an eco key set."""
+    a = _mk("Akhetonics/khepri", eco_api_key="sk-kimi")
+    assert a._worker_provider(_issue(labels=["eco"])) == ("claude-fable-5", {})
+    assert a._worker_provider(_issue(labels=["eco", "complex"])) == ("claude-opus-5-5", {})
+
+
+def test_forced_lunima_does_not_change_other_repositories():
+    a = _mk("Akhetonics/khepri", openrouter_force_repos=["aignermax/Lunima"])
+    assert a._worker_provider(_issue(labels=["complex"])) == ("claude-opus-5-5", {})
+
+
+def test_forced_provider_missing_key_never_falls_back_to_premium():
+    a = _mk("aignermax/Lunima", openrouter_force_repos=["aignermax/Lunima"], openrouter_api_key=None)
+    with pytest.raises(RuntimeError, match="no premium fallback"):
+        a._worker_provider(_issue(labels=["complex"]))
