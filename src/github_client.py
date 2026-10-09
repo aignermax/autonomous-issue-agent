@@ -56,7 +56,7 @@ class GitHubClient:
             self._authenticated_login = self.gh.get_user().login
         return self._authenticated_login
 
-    def find_next_issue(self, label: str):
+    def find_next_issue(self, label: str, skip_labels=()):
         """
         Find the next open issue with the specified activation label.
         Returns the OLDEST issue first (lowest number) to process in order.
@@ -72,6 +72,13 @@ class GitHubClient:
         for issue in self.repo.get_issues(state="open", labels=[label], sort="created", direction="asc"):
             # Skip pull requests
             if issue.pull_request:
+                continue
+
+            # Claimed or blocked elsewhere (e.g. the PO loop's `agent-running`, or
+            # escalated to `needs-human`) — never take those.
+            hit = {l.name.lower() for l in issue.labels} & {s.lower() for s in skip_labels} if skip_labels else set()
+            if hit:
+                log.info(f"Skipping issue #{issue.number} - labelled {sorted(hit)}")
                 continue
 
             # Skip issues that are already assigned (another agent is working on it)

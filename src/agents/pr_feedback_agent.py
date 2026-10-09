@@ -34,7 +34,7 @@ from ..config import Config
 from ..git_repo import GitRepo
 from ..github_client import GitHubClient
 from ..pr_media import publish_walkthrough
-from .. import provider_policy
+from .. import control, provider_policy
 from .agent_config import ProjectConfig, load_project_config_from_text
 
 log = logging.getLogger("agent")
@@ -266,6 +266,13 @@ class PRFeedbackAgent:
         from ..backoff import backoff_seconds
         failures = 0
         while True:
+            reason = control.is_paused()
+            if reason is not None:
+                control.report("paused", reason=reason)
+                log.info(f"[pr-feedback] paused ({reason}) — skipping cycle")
+                time.sleep(self.config.poll_interval)
+                continue
+            control.report("idle")
             try:
                 self.run_once()
                 failures = 0
@@ -282,6 +289,7 @@ class PRFeedbackAgent:
     # -- feedback handling ------------------------------------------------
 
     def _handle_feedback(self, pr, key: str, comment) -> None:
+        control.report("working", repo=self.current_repo_name, pr=pr.number, title=getattr(pr, "title", ""))
         branch = pr.head.ref
         log.info(
             f"[pr-feedback] PR #{pr.number}: handling comment {comment.id} "
