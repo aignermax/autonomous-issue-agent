@@ -457,3 +457,38 @@ class TestStaleRunningLabelSweep:
         qa = self._make_qa()
         qa.github.repo.get_pulls.side_effect = RuntimeError("boom")
         qa._sweep_stale_running_labels()  # must not raise
+
+
+class TestFindNextPr:
+    """Escalated PRs must leave the QA queue, or verify → fail → escalate loops forever."""
+
+    @staticmethod
+    def _pr(number, *labels):
+        pr = Mock()
+        pr.number = number
+        pr.title = f"Agent: change {number}"
+        pr.labels = []
+        for name in labels:
+            label = Mock()
+            label.name = name
+            pr.labels.append(label)
+        return pr
+
+    def test_skips_escalated_and_already_verified_prs(self):
+        from src.agents.qa_agent import QAAgent
+        qa = QAAgent.__new__(QAAgent)
+        qa.github = Mock()
+        qa.github.repo.get_pulls.return_value = [
+            self._pr(1471, "needs-human"),
+            self._pr(1472, "qa-passed"),
+            self._pr(1473, "qa-running"),
+            self._pr(1474, "agent-pr"),
+        ]
+        assert qa._find_next_pr().number == 1474
+
+    def test_returns_none_when_only_escalated_prs_remain(self):
+        from src.agents.qa_agent import QAAgent
+        qa = QAAgent.__new__(QAAgent)
+        qa.github = Mock()
+        qa.github.repo.get_pulls.return_value = [self._pr(1471, "Needs-Human")]
+        assert qa._find_next_pr() is None
