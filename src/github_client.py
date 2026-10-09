@@ -116,7 +116,7 @@ class GitHubClient:
 
         return None
 
-    def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "", base: str = "main", previous_pr_number: int = None, walkthrough: str = "") -> str:
+    def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "", base: str = "main", previous_pr_number: int = None, walkthrough: str = "", labels=()) -> str:
         """
         Create a pull request for the issue.
 
@@ -162,6 +162,12 @@ class GitHubClient:
             head=branch,
             base=base,
         )
+        if labels:
+            # e.g. `agent-pr`, so the PO loop's review/merge pass picks the PR up
+            try:
+                pr.add_to_labels(*labels)
+            except Exception as e:
+                log.warning(f"Could not label PR #{pr.number} with {list(labels)}: {e}")
         return pr.html_url
 
     def close_issue(self, issue, pr_url: str) -> None:

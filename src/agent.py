@@ -601,6 +601,7 @@ class Agent:
                 base=base_branch,
                 previous_pr_number=previous_pr_number,
                 walkthrough=walkthrough,
+                labels=self.config.pr_labels,
             )
         except Exception as e:
             error_str = str(e).lower()
@@ -624,6 +625,7 @@ class Agent:
                     base=default_branch,
                     previous_pr_number=None,
                     walkthrough=walkthrough,
+                    labels=self.config.pr_labels,
                 )
             else:
                 raise
