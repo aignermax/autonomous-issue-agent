@@ -36,6 +36,9 @@ PR_TITLE_PREFIX = "Agent:"
 LABEL_PASSED = "qa-passed"
 LABEL_FAILED = "qa-failed"
 LABEL_RUNNING = "qa-running"
+# Escalated to a human (QA-fix rounds exhausted): QA must not pick it up again,
+# or verify → fail → escalate repeats forever (PR #1471: 154 rounds).
+LABEL_ESCALATED = "needs-human"
 
 
 @dataclass
@@ -145,6 +148,8 @@ class QAAgent:
                 continue
             if LABEL_RUNNING in label_names:
                 # Another QA worker is already on it.
+                continue
+            if LABEL_ESCALATED in label_names:
                 continue
 
             return pr
