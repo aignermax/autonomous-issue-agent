@@ -56,7 +56,7 @@ class GitHubClient:
             self._authenticated_login = self.gh.get_user().login
         return self._authenticated_login
 
-    def find_next_issue(self, label: str):
+    def find_next_issue(self, label: str, skip_labels=()):
         """
         Find the next open issue with the specified activation label.
         Returns the OLDEST issue first (lowest number) to process in order.
@@ -72,6 +72,13 @@ class GitHubClient:
         for issue in self.repo.get_issues(state="open", labels=[label], sort="created", direction="asc"):
             # Skip pull requests
             if issue.pull_request:
+                continue
+
+            # Claimed or blocked elsewhere (e.g. the PO loop's `agent-running`, or
+            # escalated to `needs-human`) — never take those.
+            hit = {l.name.lower() for l in issue.labels} & {s.lower() for s in skip_labels} if skip_labels else set()
+            if hit:
+                log.info(f"Skipping issue #{issue.number} - labelled {sorted(hit)}")
                 continue
 
             # Skip issues that are already assigned (another agent is working on it)
@@ -109,7 +116,7 @@ class GitHubClient:
 
         return None
 
-    def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "", base: str = "main", previous_pr_number: int = None, walkthrough: str = "") -> str:
+    def create_pull_request(self, branch: str, issue, body_suffix: str = "", summary: str = "", base: str = "main", previous_pr_number: int = None, walkthrough: str = "", labels=()) -> str:
         """
         Create a pull request for the issue.
 
@@ -155,6 +162,12 @@ class GitHubClient:
             head=branch,
             base=base,
         )
+        if labels:
+            # e.g. `agent-pr`, so the PO loop's review/merge pass picks the PR up
+            try:
+                pr.add_to_labels(*labels)
+            except Exception as e:
+                log.warning(f"Could not label PR #{pr.number} with {list(labels)}: {e}")
         return pr.html_url
 
     def close_issue(self, issue, pr_url: str) -> None:

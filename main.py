@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 # Override=True to ensure .env values take precedence over shell environment
 load_dotenv(override=True)
 
+from src import control
 from src.config import Config
 from src.agent import Agent
 from src.agents.qa_agent import QAAgent
@@ -67,6 +68,7 @@ def main():
 
     # Load configuration
     config = Config()
+    control.init(config.session_dir, args.role)
 
     # Validate required environment variables
     missing = config.validate()

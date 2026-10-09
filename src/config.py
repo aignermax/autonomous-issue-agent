@@ -56,6 +56,13 @@ class Config:
         self.complexity_tag: str = os.environ.get("AGENT_COMPLEXITY_TAG", "complex")
 
         self.session_dir: Path = Path(os.environ.get("AGENT_SESSION_DIR", "./.sessions"))
+        # Issues carrying any of these labels are never picked up (claimed by another
+        # system, or escalated to a human).
+        # Labels put on every PR the coder opens (e.g. `agent-pr` for the PO loop).
+        self.pr_labels: list[str] = [s.strip() for s in os.environ.get(
+            "AGENT_PR_LABELS", "").split(",") if s.strip()]
+        self.skip_labels: list[str] = [s.strip() for s in os.environ.get(
+            "AGENT_SKIP_LABELS", "agent-running,needs-human").split(",") if s.strip()]
 
         # Tools install (auto-detected via tools_bootstrap; lazy init in Agent)
         self.tools_dir: Optional[Path] = None

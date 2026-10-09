@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from .. import control
 from ..config import Config
 from ..git_repo import GitRepo
 from ..github_client import GitHubClient
@@ -161,6 +162,7 @@ class QAAgent:
 
     def verify_pr(self, pr) -> QAResult:
         """Check out a PR's branch and run the configured QA commands."""
+        control.report("working", repo=self.current_repo_name, pr=pr.number, title=getattr(pr, "title", ""))
         assert self.git is not None and self.github is not None
         branch = pr.head.ref
         log.info(f"[qa] verifying PR #{pr.number} on branch {branch}")
@@ -432,12 +434,20 @@ class QAAgent:
         from ..backoff import backoff_seconds
         failures = 0
         while True:
+            reason = control.is_paused()
+            if reason is not None:
+                control.report("paused", reason=reason)
+                log.info(f"[qa] paused ({reason}) — skipping cycle")
+                time.sleep(self.config.poll_interval)
+                continue
+            control.report("idle")
             try:
                 self.run_once()
                 failures = 0
             except Exception:
                 failures += 1
                 log.exception("[qa] unexpected error in poll loop")
+            control.report("idle")
             sleep_s = backoff_seconds(failures, self.config.poll_interval)
             if failures:
                 log.info(f"[qa] backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")

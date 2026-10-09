@@ -14,7 +14,7 @@ from typing import Optional
 from .config import Config
 from .git_repo import GitRepo
 from .claude_code import ClaudeCode
-from . import provider_policy
+from . import control, provider_policy
 from .github_client import GitHubClient
 from .repo_discovery import (
     RepoRegistry,
@@ -366,7 +366,7 @@ class Agent:
                 f"\n\nWork will branch off **`{team_branch}`** and the PR will "
                 "target it. If that branch doesn't exist yet, it is created "
                 f"automatically. (Wrong branch? Edit the issue's team-branch "
-                f"field and re-add the `{self.config.issue_label}` label.)"
+                f"field, remove `needs-human` if set, and re-add the `{self.config.issue_label}` label.)"
                 if team_branch else ""
             )
             issue.create_comment(
@@ -601,6 +601,7 @@ class Agent:
                 base=base_branch,
                 previous_pr_number=previous_pr_number,
                 walkthrough=walkthrough,
+                labels=self.config.pr_labels,
             )
         except Exception as e:
             error_str = str(e).lower()
@@ -624,6 +625,7 @@ class Agent:
                     base=default_branch,
                     previous_pr_number=None,
                     walkthrough=walkthrough,
+                    labels=self.config.pr_labels,
                 )
             else:
                 raise
@@ -772,7 +774,7 @@ class Agent:
                 f"⚠️ This issue declares team branch `{team_branch}`, which "
                 f"does not exist, and creating it from `{working}` failed "
                 f"(`{push.stderr.strip()[:200]}`). Please create the branch "
-                f"manually, then re-add the `{self.config.issue_label}` label."
+                f"manually, then remove `needs-human` and re-add the `{self.config.issue_label}` label."
             )
             issue.add_to_labels("needs-human")
         except Exception as comment_error:
@@ -812,6 +814,7 @@ class Agent:
         # stored in the existing session state; for a new session we claim the
         # issue now and derive a fresh branch name.
         issue_num = issue.number
+        control.report("working", repo=getattr(self, "current_repo_name", None), issue=issue_num, title=getattr(issue, "title", ""))
         existing_state = self.session_manager.load_state(issue_num)
         if existing_state:
             branch = existing_state.branch_name
@@ -1480,7 +1483,7 @@ class Agent:
             )
             return
 
-        issue = self.github.find_next_issue(self.config.issue_label)
+        issue = self.github.find_next_issue(self.config.issue_label, skip_labels=self.config.skip_labels)
         if not issue:
             log.info(f"No open issues found in {repo_name} with label: {self.config.issue_label}")
             return  # Done for this cycle, next cycle will check next repo
@@ -1768,6 +1771,13 @@ class Agent:
         from .backoff import backoff_seconds
         failures = 0
         while True:
+            reason = control.is_paused()
+            if reason is not None:
+                control.report("paused", reason=reason)
+                log.info(f"paused ({reason}) — skipping cycle")
+                time.sleep(self.config.poll_interval)
+                continue
+            control.report("idle")
             try:
                 self.run_once()
                 failures = 0
@@ -1775,6 +1785,7 @@ class Agent:
                 failures += 1
                 log.exception("Unexpected error in poll loop")
 
+            control.report("idle")
             sleep_s = backoff_seconds(failures, self.config.poll_interval)
             if failures:
                 log.info(f"Backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")

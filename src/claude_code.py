@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 
+from . import control
+
 log = logging.getLogger("agent")
 
 
@@ -262,6 +264,7 @@ class ClaudeCode:
 
         while process.poll() is None:  # While process is running
             time.sleep(check_interval)
+            control.touch()  # Control Center: the role is busy, not dead
 
             activity_detected = False
 
