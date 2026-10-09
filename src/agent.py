@@ -366,7 +366,7 @@ class Agent:
                 f"\n\nWork will branch off **`{team_branch}`** and the PR will "
                 "target it. If that branch doesn't exist yet, it is created "
                 f"automatically. (Wrong branch? Edit the issue's team-branch "
-                f"field and re-add the `{self.config.issue_label}` label.)"
+                f"field, remove `needs-human` if set, and re-add the `{self.config.issue_label}` label.)"
                 if team_branch else ""
             )
             issue.create_comment(
@@ -774,7 +774,7 @@ class Agent:
                 f"⚠️ This issue declares team branch `{team_branch}`, which "
                 f"does not exist, and creating it from `{working}` failed "
                 f"(`{push.stderr.strip()[:200]}`). Please create the branch "
-                f"manually, then re-add the `{self.config.issue_label}` label."
+                f"manually, then remove `needs-human` and re-add the `{self.config.issue_label}` label."
             )
             issue.add_to_labels("needs-human")
         except Exception as comment_error:
@@ -1785,6 +1785,7 @@ class Agent:
                 failures += 1
                 log.exception("Unexpected error in poll loop")
 
+            control.report("idle")
             sleep_s = backoff_seconds(failures, self.config.poll_interval)
             if failures:
                 log.info(f"Backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")

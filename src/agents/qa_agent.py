@@ -447,6 +447,7 @@ class QAAgent:
             except Exception:
                 failures += 1
                 log.exception("[qa] unexpected error in poll loop")
+            control.report("idle")
             sleep_s = backoff_seconds(failures, self.config.poll_interval)
             if failures:
                 log.info(f"[qa] backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")

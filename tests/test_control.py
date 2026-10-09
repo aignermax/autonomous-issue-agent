@@ -36,6 +36,16 @@ class TestPause:
         (tmp_path / control.CONTROL_FILE).write_text("{nope", encoding="utf-8")
         assert control.pause_reason(tmp_path, "coder") is None
 
+    def test_naive_until_is_local_time_not_a_crash(self, tmp_path):
+        naive = (datetime.now() + timedelta(hours=1)).replace(microsecond=0).isoformat()
+        _write_control(tmp_path, {"coder": {"until": naive, "reason": "r"}})
+        assert control.pause_reason(tmp_path, "coder") == "r"
+
+    def test_malformed_shapes_never_raise(self, tmp_path):
+        for payload in ([], {"paused": ["coder"]}, {"paused": {"coder": {"until": 12345}}}):
+            (tmp_path / control.CONTROL_FILE).write_text(json.dumps(payload), encoding="utf-8")
+            control.pause_reason(tmp_path, "coder")  # must not raise
+
     def test_is_paused_uses_init_role(self, tmp_path):
         _write_control(tmp_path, {"pr-feedback": {"until": None, "reason": "r"}})
         control.init(tmp_path, "pr-feedback")
@@ -54,6 +64,13 @@ class TestStatusReport:
         control.report("idle")
         third = json.loads((tmp_path / "status-coder.json").read_text(encoding="utf-8"))
         assert third["state"] == "idle"
+
+    def test_touch_refreshes_current_state(self, tmp_path):
+        control.init(tmp_path, "qa")
+        control.report("working", pr=5)
+        control.touch()
+        status = json.loads((tmp_path / "status-qa.json").read_text(encoding="utf-8"))
+        assert status["state"] == "working" and status["detail"] == {"pr": 5}
 
     def test_report_without_init_is_a_noop(self, tmp_path):
         control._session_dir = None

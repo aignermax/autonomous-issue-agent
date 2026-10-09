@@ -279,6 +279,7 @@ class PRFeedbackAgent:
             except Exception:
                 failures += 1
                 log.exception("[pr-feedback] unexpected error in poll loop")
+            control.report("idle")
             sleep_s = backoff_seconds(failures, self.config.poll_interval)
             if failures:
                 log.info(f"[pr-feedback] backing off after {failures} failed cycle(s): sleeping {sleep_s}s ...")
