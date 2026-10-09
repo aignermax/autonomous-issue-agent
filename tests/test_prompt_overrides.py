@@ -56,6 +56,17 @@ def test_broken_override_falls_back_to_builtin(overrides, caplog):
     assert "unusable" in caplog.text
 
 
+@pytest.mark.parametrize("text", ["{pr_number.x}", "{pr_number[0]}", "{0}"])
+def test_attribute_and_index_placeholders_fall_back(overrides, text):
+    (overrides / "pr-feedback.md").write_text(text, encoding="utf-8")
+    assert "#12" in pt.build_pr_feedback_prompt(_pr(), "agent/issue-7", "x", 7)
+
+
+def test_override_that_is_a_directory_falls_back(overrides):
+    (overrides / "pr-feedback.md").mkdir()
+    assert "#12" in pt.build_pr_feedback_prompt(_pr(), "agent/issue-7", "x", 7)
+
+
 def test_no_override_dir_uses_builtin(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_PROMPTS_DIR", str(tmp_path / "missing"))
     importlib.reload(pt)

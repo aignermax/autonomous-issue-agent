@@ -31,7 +31,9 @@ def _render(name: str, **values) -> str:
     if path.is_file():
         try:
             return path.read_text(encoding="utf-8").format(**values)
-        except (KeyError, IndexError, ValueError) as e:
+        # bad placeholders ({x.y}, {x[0]}, unknown/unbalanced) and a file swapped
+        # away by the editor between the check and the read all mean: use the built-in
+        except (KeyError, IndexError, ValueError, AttributeError, TypeError, OSError) as e:
             _log.warning(f"Prompt override {path} unusable ({e!r}) — using the built-in prompt")
     return _BUILTIN[name].format(**values)
 
