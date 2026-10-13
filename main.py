@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 # Override=True to ensure .env values take precedence over shell environment
 load_dotenv(override=True)
 
-from src import control
+from src import control, log_rotation
 from src.config import Config
 from src.agent import Agent
 from src.agents.qa_agent import QAAgent
@@ -35,7 +35,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("agent.log"),
+        # shared by coder/qa/pr-feedback; rotates at AGENT_LOG_MAX_MB (default 50)
+        log_rotation.from_env("agent.log"),
     ],
 )
 log = logging.getLogger("agent")
