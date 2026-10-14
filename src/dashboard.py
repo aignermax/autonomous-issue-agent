@@ -32,6 +32,24 @@ from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 
+def tail_lines_rotated(path, max_lines: int, max_bytes: int = 262144) -> list:
+    """`tail_lines` across a size rotation: when the current file holds less than
+    `max_bytes`, the end of `<path>.1` (the file it was rotated from) is read first,
+    so markers written just before a rotation (e.g. the coder's "Found issue #N")
+    don't vanish from the window."""
+    from pathlib import Path
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    lines = []
+    previous = path.with_name(path.name + ".1")
+    if size < max_bytes and previous.exists():
+        lines = tail_lines(previous, max_lines, max_bytes=max_bytes - size)
+    return (lines + tail_lines(path, max_lines, max_bytes=max_bytes))[-max_lines:]
+
+
 def tail_lines(path, max_lines: int, max_bytes: int = 262144) -> list:
     """Read at most `max_lines` from the end of `path` WITHOUT loading the
     whole file. Multi-MB agent logs previously made every dashboard refresh
@@ -309,7 +327,7 @@ class DashboardMonitor:
                 # tail and the panel falsely reads "polling". Read a large byte
                 # window and keep only coder lines (drop [qa]/[pr-feedback]) so
                 # the phase markers survive regardless of the other roles' spam.
-                raw = tail_lines(self.agent_log, 8000, max_bytes=2_000_000)
+                raw = tail_lines_rotated(self.agent_log, 8000, max_bytes=2_000_000)
                 lines = [l for l in raw
                          if "[qa]" not in l and "[pr-feedback]" not in l
                          and "[qa-review]" not in l][-1200:]

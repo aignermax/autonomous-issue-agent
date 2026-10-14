@@ -247,20 +247,30 @@ class InteractiveDashboard(BaseDashboard):
             time.sleep(2)
             return
 
-        # Use tail -f on Unix, or manual polling on Windows
+        # agent.log is rotated by size: follow the *name* (tail -F), not the file
         try:
             if sys.platform != 'win32':
-                subprocess.run(["tail", "-f", str(self.monitor.agent_log)])
+                subprocess.run(["tail", "-F", str(self.monitor.agent_log)])
             else:
-                # Windows: manual tail -f implementation
-                with open(self.monitor.agent_log, 'r') as f:
-                    f.seek(0, 2)  # Go to EOF
+                # Windows: manual tail -F — reopen when the file was rotated (shrank)
+                path = self.monitor.agent_log
+                f = open(path, 'r', encoding='utf-8', errors='replace')
+                f.seek(0, 2)  # Go to EOF
+                try:
                     while True:
                         line = f.readline()
                         if line:
                             print(line.rstrip())
-                        else:
-                            time.sleep(0.1)
+                            continue
+                        time.sleep(0.2)
+                        try:
+                            if path.stat().st_size < f.tell():
+                                f.close()
+                                f = open(path, 'r', encoding='utf-8', errors='replace')
+                        except OSError:
+                            pass
+                finally:
+                    f.close()
         except KeyboardInterrupt:
             self.console.print("\n\n[+] Stopped streaming", style="green")
 

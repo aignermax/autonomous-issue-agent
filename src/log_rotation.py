@@ -10,6 +10,7 @@ process rotates.
 
 import logging.handlers
 import os
+import sys
 from pathlib import Path
 
 try:  # POSIX only — the agent runs in WSL; on other systems rotation still works, unlocked
@@ -71,8 +72,20 @@ class SharedRotatingFileHandler(logging.handlers.WatchedFileHandler):
         # our own stream now points at .1 — WatchedFileHandler.emit reopens the path
 
 
+def _env_number(name: str, default: float) -> float:
+    """A typo in .env must not stop the agents from starting — warn and use the default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"WARNING: {name}={raw!r} is not a number — using {default}", file=sys.stderr)
+        return default
+
+
 def from_env(filename: str = "agent.log") -> SharedRotatingFileHandler:
     """``AGENT_LOG_MAX_MB`` (default 50, 0 = never rotate) and ``AGENT_LOG_BACKUPS`` (default 3)."""
-    max_mb = float(os.environ.get("AGENT_LOG_MAX_MB", "50"))
-    backups = int(os.environ.get("AGENT_LOG_BACKUPS", "3"))
+    max_mb = _env_number("AGENT_LOG_MAX_MB", 50)
+    backups = int(_env_number("AGENT_LOG_BACKUPS", 3))
     return SharedRotatingFileHandler(filename, int(max_mb * 1024 * 1024), backups)

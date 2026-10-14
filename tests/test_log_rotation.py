@@ -55,6 +55,22 @@ def test_huge_legacy_file_is_rotated_on_first_record(tmp_path):
     assert path.read_text(encoding="utf-8").strip().endswith("first line after upgrade")
 
 
+def test_garbage_settings_fall_back_to_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_LOG_MAX_MB", "50MB")
+    monkeypatch.setenv("AGENT_LOG_BACKUPS", "3.0")
+    h = log_rotation.from_env(str(tmp_path / "agent.log"))
+    assert h.max_bytes == 50 * 1024 * 1024 and h.backup_count == 3
+    h.close()
+
+
+def test_dashboard_tail_reads_across_rotation(tmp_path):
+    from src.dashboard import tail_lines_rotated
+    (tmp_path / "agent.log.1").write_text("Found issue #7\nlater\n", encoding="utf-8")
+    (tmp_path / "agent.log").write_text("after rotation\n", encoding="utf-8")
+    lines = [l.strip() for l in tail_lines_rotated(tmp_path / "agent.log", 100, max_bytes=10_000)]
+    assert lines == ["Found issue #7", "later", "after rotation"]
+
+
 def test_zero_disables_rotation(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_LOG_MAX_MB", "0")
     h = log_rotation.from_env(str(tmp_path / "agent.log"))
